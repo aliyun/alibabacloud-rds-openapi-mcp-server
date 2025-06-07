@@ -1349,6 +1349,439 @@ async def restart_db_instance(
         logger.error(f"Error occurred while restarting instance: {str(e)}")
         raise OpenAPIError(f"Failed to restart RDS instance: {str(e)}")
 
+@mcp.tool()
+async def modify_db_instance_connection_string(
+        region_id: str,
+        dbinstance_id: str,
+        connection_string_prefix: str,
+        port: str = None,
+        current_connection_string: str = None,
+        client_token: str = None
+) -> Dict[str, Any]:
+    """Modify the connection string of an RDS instance.
+
+    Args:
+        region_id (str): The region ID of the RDS instance.
+        dbinstance_id (str): The ID of the RDS instance.
+        connection_string_prefix (str): The new connection string prefix.
+        port (str, optional): The port of the new connection string.
+        current_connection_string (str, optional): The current connection string to be modified.
+        client_token (str, optional): Idempotency token, max 64 ASCII characters.
+
+    Returns:
+        Dict[str, Any]: Response containing the request ID.
+    """
+    try:
+        client = get_rds_client(region_id)
+        request = rds_20140815_models.ModifyDBInstanceConnectionStringRequest(
+            dbinstance_id=dbinstance_id,
+            connection_string_prefix=connection_string_prefix
+        )
+        if port:
+            request.port = port
+        if current_connection_string:
+            request.current_connection_string = current_connection_string
+        if client_token:
+            request.client_token = client_token
+        response = client.modify_dbinstance_connection_string(request)
+        return response.body.to_map()
+    except Exception as e:
+        logger.error(f"Error occurred while modifying connection string: {str(e)}")
+        raise OpenAPIError(f"Failed to modify RDS instance connection string: {str(e)}")
+
+
+@mcp.tool()
+async def modify_db_instance_maintain_time(
+        region_id: str,
+        dbinstance_id: str,
+        maintain_time: str,
+        client_token: str = None
+) -> Dict[str, Any]:
+    """Modify the maintain time of an RDS instance.
+
+    Args:
+        region_id (str): The region ID of the RDS instance.
+        dbinstance_id (str): The ID of the RDS instance.
+        maintain_time (str): The new maintain time, format: HH:mmZ-HH:mmZ (如：23:00Z-00:00Z)。
+        client_token (str, optional): Idempotency token, max 64 ASCII characters.
+
+    Returns:
+        Dict[str, Any]: Response containing the request ID.
+    """
+    try:
+        client = get_rds_client(region_id)
+        request = rds_20140815_models.ModifyDBInstanceMaintainTimeRequest(
+            dbinstance_id=dbinstance_id,
+            maintain_time=maintain_time
+        )
+        if client_token:
+            request.client_token = client_token
+        response = client.modify_dbinstance_maintain_time(request)
+        return response.body.to_map()
+    except Exception as e:
+        logger.error(f"Error occurred while modifying maintain time: {str(e)}")
+        raise OpenAPIError(f"Failed to modify RDS instance maintain time: {str(e)}")
+
+
+@mcp.tool()
+async def modify_db_instance_network_type(
+        region_id: str,
+        dbinstance_id: str,
+        instance_network_type: str,
+        vpc_id: str = None,
+        vswitch_id: str = None,
+        private_ip_address: str = None,
+        client_token: str = None
+) -> Dict[str, Any]:
+    """Modify the network type of an RDS instance.
+
+    Args:
+        region_id (str): The region ID of the RDS instance.
+        dbinstance_id (str): The ID of the RDS instance.
+        instance_network_type (str): The new network type (Classic/VPC)。
+        vpc_id (str, optional): The VPC ID.
+        vswitch_id (str, optional): The VSwitch ID.
+        private_ip_address (str, optional): The private IP address.
+        client_token (str, optional): Idempotency token, max 64 ASCII characters.
+
+    Returns:
+        Dict[str, Any]: Response containing the request ID.
+    """
+    try:
+        client = get_rds_client(region_id)
+        request = rds_20140815_models.ModifyDBInstanceNetworkTypeRequest(
+            dbinstance_id=dbinstance_id,
+            instance_network_type=instance_network_type
+        )
+        if vpc_id:
+            request.vpc_id = vpc_id
+        if vswitch_id:
+            request.vswitch_id = vswitch_id
+        if private_ip_address:
+            request.private_ip_address = private_ip_address
+        if client_token:
+            request.client_token = client_token
+        response = client.modify_dbinstance_network_type(request)
+        return response.body.to_map()
+    except Exception as e:
+        logger.error(f"Error occurred while modifying network type: {str(e)}")
+        raise OpenAPIError(f"Failed to modify RDS instance network type: {str(e)}")
+
+
+@mcp.tool()
+async def modify_security_group_configuration(
+        region_id: str,
+        dbinstance_id: str,
+        security_group_id: str,
+        security_group_name: str = None,
+        client_token: str = None
+) -> Dict[str, Any]:
+    """Modify the security group configuration of an RDS instance.
+
+    Args:
+        region_id (str): The region ID of the RDS instance.
+        dbinstance_id (str): The ID of the RDS instance.
+        security_group_id (str): The ID of the security group.
+        security_group_name (str, optional): The name of the security group.
+        client_token (str, optional): Idempotency token, max 64 ASCII characters.
+
+    Returns:
+        Dict[str, Any]: Response containing the request ID.
+    """
+    try:
+        client = get_rds_client(region_id)
+        request = rds_20140815_models.ModifySecurityGroupConfigurationRequest(
+            dbinstance_id=dbinstance_id,
+            security_group_id=security_group_id
+        )
+        if security_group_name:
+            request.security_group_name = security_group_name
+        if client_token:
+            request.client_token = client_token
+        response = client.modify_security_group_configuration(request)
+        return response.body.to_map()
+    except Exception as e:
+        logger.error(f"Error occurred while modifying security group configuration: {str(e)}")
+        raise OpenAPIError(f"Failed to modify RDS instance security group configuration: {str(e)}")
+
+
+@mcp.tool()
+async def create_database(
+        region_id: str,
+        dbinstance_id: str,
+        db_name: str,
+        character_set_name: str = None,
+        db_description: str = None,
+        client_token: str = None
+) -> Dict[str, Any]:
+    """Create a database in an RDS instance.
+
+    Args:
+        region_id (str): The region ID of the RDS instance.
+        dbinstance_id (str): The ID of the RDS instance.
+        db_name (str): The name of the database to create.
+        character_set_name (str, optional): The character set of the database.
+        db_description (str, optional): The description of the database.
+        client_token (str, optional): Idempotency token, max 64 ASCII characters.
+
+    Returns:
+        Dict[str, Any]: Response containing the request ID.
+    """
+    try:
+        client = get_rds_client(region_id)
+        request = rds_20140815_models.CreateDatabaseRequest(
+            dbinstance_id=dbinstance_id,
+            db_name=db_name
+        )
+        if character_set_name:
+            request.character_set_name = character_set_name
+        if db_description:
+            request.db_description = db_description
+        if client_token:
+            request.client_token = client_token
+        response = client.create_database(request)
+        return response.body.to_map()
+    except Exception as e:
+        logger.error(f"Error occurred while creating database: {str(e)}")
+        raise OpenAPIError(f"Failed to create database: {str(e)}")
+
+
+@mcp.tool()
+async def create_backup(
+        region_id: str,
+        dbinstance_id: str,
+        backup_method: str = None,
+        backup_type: str = None,
+        db_names: str = None,
+        backup_strategy: str = None,
+        client_token: str = None
+) -> Dict[str, Any]:
+    """Create a backup for an RDS instance.
+
+    Args:
+        region_id (str): The region ID of the RDS instance.
+        dbinstance_id (str): The ID of the RDS instance.
+        backup_method (str, optional): The backup method (Physical/Logical)。
+        backup_type (str, optional): The backup type (Full/Incremental)。
+        db_names (str, optional): The databases to back up, separated by commas。
+        backup_strategy (str, optional): The backup strategy。
+        client_token (str, optional): Idempotency token, max 64 ASCII characters。
+
+    Returns:
+        Dict[str, Any]: Response containing the request ID。
+    """
+    try:
+        client = get_rds_client(region_id)
+        request = rds_20140815_models.CreateBackupRequest(
+            dbinstance_id=dbinstance_id
+        )
+        if backup_method:
+            request.backup_method = backup_method
+        if backup_type:
+            request.backup_type = backup_type
+        if db_names:
+            request.db_names = db_names
+        if backup_strategy:
+            request.backup_strategy = backup_strategy
+        if client_token:
+            request.client_token = client_token
+        response = client.create_backup(request)
+        return response.body.to_map()
+    except Exception as e:
+        logger.error(f"Error occurred while creating backup: {str(e)}")
+        raise OpenAPIError(f"Failed to create backup: {str(e)}")
+
+
+@mcp.tool()
+async def describe_backups(
+        region_id: str,
+        dbinstance_id: str,
+        backup_status: str = None,
+        backup_mode: str = None,
+        start_time: str = None,
+        end_time: str = None,
+        page_number: int = 1,
+        page_size: int = 30
+) -> Dict[str, Any]:
+    """Query backup list for an RDS instance.
+
+    Args:
+        region_id (str): The region ID of the RDS instance.
+        dbinstance_id (str): The ID of the RDS instance.
+        backup_status (str, optional): The status of the backup.
+        backup_mode (str, optional): The backup mode (Automated/Manual)。
+        start_time (str, optional): The start time for backup query。
+        end_time (str, optional): The end time for backup query。
+        page_number (int, optional): Page number, default 1。
+        page_size (int, optional): Page size, default 30。
+
+    Returns:
+        Dict[str, Any]: Response containing the backup list。
+    """
+    try:
+        client = get_rds_client(region_id)
+        request = rds_20140815_models.DescribeBackupsRequest(
+            dbinstance_id=dbinstance_id,
+            page_number=page_number,
+            page_size=page_size
+        )
+        if backup_status:
+            request.backup_status = backup_status
+        if backup_mode:
+            request.backup_mode = backup_mode
+        if start_time:
+            request.start_time = start_time
+        if end_time:
+            request.end_time = end_time
+        response = client.describe_backups(request)
+        return response.body.to_map()
+    except Exception as e:
+        logger.error(f"Error occurred while describing backups: {str(e)}")
+        raise OpenAPIError(f"Failed to describe backups: {str(e)}")
+
+@mcp.tool()
+async def describe_backup_policy(
+        region_id: str,
+        dbinstance_id: str
+) -> Dict[str, Any]:
+    """Query the backup policy of an RDS instance.
+
+    Args:
+        region_id (str): The region ID of the RDS instance。
+        dbinstance_id (str): The ID of the RDS instance。
+
+    Returns:
+        Dict[str, Any]: Response containing the backup policy。
+    """
+    try:
+        client = get_rds_client(region_id)
+        request = rds_20140815_models.DescribeBackupPolicyRequest(
+            dbinstance_id=dbinstance_id
+        )
+        response = client.describe_backup_policy(request)
+        return response.body.to_map()
+    except Exception as e:
+        logger.error(f"Error occurred while describing backup policy: {str(e)}")
+        raise OpenAPIError(f"Failed to describe backup policy: {str(e)}")
+
+
+@mcp.tool()
+async def modify_backup_policy(
+        region_id: str,
+        dbinstance_id: str,
+        preferred_backup_time: str = None,
+        preferred_backup_period: str = None,
+        backup_retention_period: int = None,
+        backup_log: str = None,
+        log_backup_retention_period: int = None,
+        enable_backup_log: bool = None,
+        client_token: str = None
+) -> Dict[str, Any]:
+    """Modify the backup policy of an RDS instance.
+
+    Args:
+        region_id (str): The region ID of the RDS instance。
+        dbinstance_id (str): The ID of the RDS instance。
+        preferred_backup_time (str, optional): Preferred backup time, e.g. 02:00Z-03:00Z。
+        preferred_backup_period (str, optional): Preferred backup period, e.g. Monday,Tuesday。
+        backup_retention_period (int, optional): Backup retention period (days)。
+        backup_log (str, optional): Backup log setting。
+        log_backup_retention_period (int, optional): Log backup retention period (days)。
+        enable_backup_log (bool, optional): Enable log backup。
+        client_token (str, optional): Idempotency token。
+
+    Returns:
+        Dict[str, Any]: Response containing the request ID。
+    """
+    try:
+        client = get_rds_client(region_id)
+        request = rds_20140815_models.ModifyBackupPolicyRequest(
+            dbinstance_id=dbinstance_id
+        )
+        if preferred_backup_time:
+            request.preferred_backup_time = preferred_backup_time
+        if preferred_backup_period:
+            request.preferred_backup_period = preferred_backup_period
+        if backup_retention_period:
+            request.backup_retention_period = backup_retention_period
+        if backup_log:
+            request.backup_log = backup_log
+        if log_backup_retention_period:
+            request.log_backup_retention_period = log_backup_retention_period
+        if enable_backup_log is not None:
+            request.enable_backup_log = enable_backup_log
+        if client_token:
+            request.client_token = client_token
+        response = client.modify_backup_policy(request)
+        return response.body.to_map()
+    except Exception as e:
+        logger.error(f"Error occurred while modifying backup policy: {str(e)}")
+        raise OpenAPIError(f"Failed to modify backup policy: {str(e)}")
+
+
+@mcp.tool()
+async def describe_db_instance_ha_config(
+        region_id: str,
+        dbinstance_id: str
+) -> Dict[str, Any]:
+    """Query the high availability (HA) configuration of an RDS instance.
+
+    Args:
+        region_id (str): The region ID of the RDS instance。
+        dbinstance_id (str): The ID of the RDS instance。
+
+    Returns:
+        Dict[str, Any]: Response containing the HA configuration。
+    """
+    try:
+        client = get_rds_client(region_id)
+        request = rds_20140815_models.DescribeDBInstanceHAConfigRequest(
+            dbinstance_id=dbinstance_id
+        )
+        response = client.describe_dbinstance_haconfig(request)
+        return response.body.to_map()
+    except Exception as e:
+        logger.error(f"Error occurred while describing HA config: {str(e)}")
+        raise OpenAPIError(f"Failed to describe HA config: {str(e)}")
+
+
+@mcp.tool()
+async def modify_db_instance_ha_config(
+        region_id: str,
+        dbinstance_id: str,
+        ha_mode: str = None,
+        sync_mode: str = None,
+        client_token: str = None
+) -> Dict[str, Any]:
+    """Modify the high availability (HA) configuration of an RDS instance.
+
+    Args:
+        region_id (str): The region ID of the RDS instance。
+        dbinstance_id (str): The ID of the RDS instance。
+        ha_mode (str, optional): The new HA mode (RPO/RTO)。
+        sync_mode (str, optional): The new sync mode (Sync/SemiSync/Async)。
+        client_token (str, optional): Idempotency token。
+
+    Returns:
+        Dict[str, Any]: Response containing the request ID。
+    """
+    try:
+        client = get_rds_client(region_id)
+        request = rds_20140815_models.ModifyDBInstanceHAConfigRequest(
+            dbinstance_id=dbinstance_id
+        )
+        if ha_mode:
+            request.ha_mode = ha_mode
+        if sync_mode:
+            request.sync_mode = sync_mode
+        if client_token:
+            request.client_token = client_token
+        response = client.modify_dbinstance_haconfig(request)
+        return response.body.to_map()
+    except Exception as e:
+        logger.error(f"Error occurred while modifying HA config: {str(e)}")
+        raise OpenAPIError(f"Failed to modify HA config: {str(e)}")
+
 
 def main():
     mcp.run(transport=os.getenv('SERVER_TRANSPORT', 'stdio'))
