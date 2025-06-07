@@ -108,6 +108,17 @@ Add the following configuration to the MCP client configuration file:
 * `modify_db_instance_spec`: Modify RDS instance specifications.
 * `modify_parameter`: Modify RDS instance parameters.
 * `restart_db_instance`: Restart an RDS instance.
+* `modify_db_instance_connection_string`: Modify an RDS instance's connection string.
+* `modify_db_instance_maintain_time`: Modify an RDS instance's maintain time.
+* `modify_db_instance_network_type`: Modify an RDS instance's network type.
+* `modify_security_group_configuration`: Modify an RDS instance's security group configuration.
+* `create_database`: Create a database in an RDS instance.
+* `create_backup`: Create a backup for an RDS instance.
+* `describe_backups`: Query backup list for an RDS instance.
+* `describe_backup_policy`: Query the backup policy of an RDS instance.
+* `modify_backup_policy`: Modify the backup policy of an RDS instance.
+* `describe_db_instance_ha_config`: Query the high availability configuration of an RDS instance.
+* `modify_db_instance_ha_config`: Modify the high availability configuration of an RDS instance.
 
 ### Resources
 None at this time
