@@ -46,7 +46,11 @@ async def describe_db_instances(region_id: str):
             page_size=100
         )
         response = client.describe_dbinstances(request)
-        return json_array_to_csv(response.body.items.dbinstance)
+        
+        res = json_array_to_csv(response.body.items.dbinstance)
+        if not res:
+            return "No RDS instances found."
+        return res
     except Exception as e:
         raise e
 
