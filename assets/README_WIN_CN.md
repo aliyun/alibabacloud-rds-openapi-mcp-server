@@ -287,16 +287,9 @@ Cherry Studio是一款集成了多种大语言模型的跨平台AI客户端，�
 4. 📤 推送到分支 (`git push origin feature/amazing-feature`)
 5. 🔄 创建Pull Request
 
-### 开发指南
-
-- 💻 确保代码符合Python PEP 8规范
-- ✅ 添加适当的测试用例
-- 📚 更新相关文档
-- 🔍 运行所有测试确保通过
-
 ## 📄 许可证
 
-本项目采用Apache 2.0许可证 - 查看[LICENSE](LICENSE)文件了解详情。
+本项目采用Apache 2.0许可证
 
 ## 💬 技术支持
 
