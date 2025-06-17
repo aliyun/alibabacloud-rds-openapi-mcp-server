@@ -1,3 +1,5 @@
+[![MseeP.ai Security Assessment Badge](https://mseep.net/pr/aliyun-alibabacloud-rds-openapi-mcp-server-badge.png)](https://mseep.ai/app/aliyun-alibabacloud-rds-openapi-mcp-server)
+
 <p align="center">English | <a href="./README_CN.md">中文</a><br></p>
 
 # Alibaba Cloud RDS OpenAPI MCP Server
