@@ -3,6 +3,10 @@
 # Alibaba Cloud RDS OpenAPI MCP Server
 MCP server for RDS Services via OPENAPI
 
+<a href="https://glama.ai/mcp/servers/@aliyun/alibabacloud-rds-openapi-mcp-server">
+  <img width="380" height="200" src="https://glama.ai/mcp/servers/@aliyun/alibabacloud-rds-openapi-mcp-server/badge" alt="Alibaba Cloud RDS OpenAPI Server MCP server" />
+</a>
+
 ## Prerequisites
 1. Install `uv` from [Astral](https://docs.astral.sh/uv/getting-started/installation/) or the [GitHub README](https://github.com/astral-sh/uv#installation)
 2. Install Python using `uv python install 3.12`
