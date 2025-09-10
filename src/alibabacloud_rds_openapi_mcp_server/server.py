@@ -14,11 +14,15 @@ from starlette.responses import Response, JSONResponse
 current_dir = os.path.dirname(os.path.abspath(__file__))
 sys.path.append(current_dir)
 import time
+import math
 from datetime import datetime
 from typing import Dict, Any, List, Optional
+from pydantic import Field
+from anyio import to_thread
 
 from alibabacloud_bssopenapi20171214 import models as bss_open_api_20171214_models
 from alibabacloud_openapi_util.client import Client as OpenApiUtilClient
+from alibabacloud_rds20140815.client import Client as RdsClient
 from alibabacloud_rds20140815 import models as rds_20140815_models
 from alibabacloud_tea_openapi import models as open_api_models
 from alibabacloud_tea_util import models as util_models
@@ -35,11 +39,13 @@ from db_service import DBService
 from utils import (transform_to_iso_8601,
                    transform_to_datetime,
                    transform_timestamp_to_datetime,
+                   utc_to_localtime_format,
                    parse_iso_8601,
                    transform_perf_key,
                    transform_das_key,
                    json_array_to_csv,
                    json_array_to_markdown,
+                   json_exec_sql,
                    get_rds_client,
                    get_vpc_client,
                    get_bill_client, get_das_client, convert_datetime_to_timestamp, current_request_headers)
@@ -64,27 +70,171 @@ class OpenAPIError(Exception):
 READ_ONLY_TOOL = ToolAnnotations(readOnlyHint=True)
 
 
-@mcp.tool(annotations=READ_ONLY_TOOL)
-async def describe_db_instances(region_id: str):
-    """
-    Queries instances.
-    Args:
-        region_id: queries instances in region id(e.g. cn-hangzhou)
-    :return:
-    """
-    client = get_rds_client(region_id)
-    try:
+@mcp.tool(annotations=READ_ONLY_TOOL,
+          description="""
+查询实例列表，返回CSV格式数据。
+sql参数在sqlite3的result表上进行数据查询，。
+result表建表语句：CREATE TABLE result ("BlueGreenDeploymentName" TEXT, "DBInstanceMemory" INTEGER, "Category" TEXT, "GreenInstanceName" TEXT, "ResourceGroupId" TEXT, "DBInstanceNetType" TEXT, "DBInstanceType" TEXT, "DBInstanceCPU" INTEGER, "MutriORsignle" BOOLEAN, "InstanceNetworkType" TEXT, "BlueInstanceName" TEXT, "DBInstanceId" TEXT, "ReadOnlyDBInstanceIds" JSON, "DBInstanceDescription" TEXT, "Engine" TEXT, "EngineVersion" TEXT, "DBInstanceStatus" TEXT, "ZoneId" TEXT, "DBInstanceClass" TEXT, "CreateTime" TEXT, "VSwitchId" TEXT, "TipsLevel" INTEGER, "DeletionProtection" BOOLEAN, "LockMode" TEXT, "PayType" TEXT, "IsAnalyticReadOnlyIns" BOOLEAN, "DBInstanceStorageType" TEXT, "InsId" INTEGER, "VpcId" TEXT, "ConnectionMode" TEXT, "VpcCloudInstanceId" TEXT, "RegionId" TEXT, "ConnectionString" TEXT, "ExpireTime" TEXT, "CPUUsage" INTEGER, "DiskUsage" INTEGER, "IOPSUsage" INTEGER, "SessionUsage" INTEGER, "MasterInstanceId" TEXT, "LockReason" TEXT)
+以下是枚举值参考：
+EngineVersion字段表示数据库引擎的版本号，其值格式根据不同的数据库引擎类型而有所不同
+Category: HighAvailability,Basic,cluster,serverless_standard,serverless_basic
+DBInstanceNetType:Intranet
+DBInstanceType:Primary,Readonly
+InstanceNetworkType:VPC
+Engine:MySQL,PostgreSQL,SQLServer,MariaDB
+DBInstanceStatus:Running,Creating,Deleting,EngineVersionUpgrading,InstanceMaintaining,DBInstanceClassChanging,Restoring,Transing
+LockMode:Unlock,LockByDiskQuota
+PayType:Postpaid,Prepaid,SERVERLESS
+DBInstanceStorageType:local_ssd,general_essd,cloud_essd,cloud_essd2,cloud_essd3
+ConnectionMode:Standard,physical
+CreateTime\ExpireTime: yyyy-MM-dd HH:mm:ss 时间格式
+注意，result表只有filter_columns里面指定字段。CPUUsage,IOPSUsage,DiskUsage,SessionUsage: 这四个字段表示实例当前的使用率。
+你需要充分使用sql分析数据，不要获取数据后再分析。
+"""
+          )
+async def describe_db_instances(
+        region_id: str = Field(description=""),
+        filter_columns: list[str] = Field(
+            description="The columns to filter instances by (e.g. 'DBInstanceId,DBInstanceDescription')"),
+        sql: str = Field(
+            description="在csv结果(结果表名为 result)上执行SQL，指定该参数时，返回SQL执行结果，支持sqlite语法。在需要对结果数据做过滤、聚合、排序等操作时使用。")
+):
+    def _convert_info(ins_list):
+        for ins in ins_list:
+            if 'DBInstanceCPU' in ins:
+                try:
+                    ins['DBInstanceCPU'] = float(ins['DBInstanceCPU'])
+                except Exception:
+                    ins['DBInstanceCPU'] = 0
+                try:
+                    ins['CreateTime'] = utc_to_localtime_format(ins['CreateTime'])
+                    if "ExpireTime" in ins and ins["ExpireTime"]:
+                        ins["ExpireTime"] = utc_to_localtime_format(ins["ExpireTime"])
+                except Exception:
+                    pass
+
+    async def _fetch_db_instances(client, page_num, page_size):
         request = rds_20140815_models.DescribeDBInstancesRequest(
             region_id=region_id,
-            page_size=100
+            page_size=page_size,
+            page_number=page_num
         )
-        response = client.describe_dbinstances(request)
+        response = await to_thread.run_sync(
+            client.describe_dbinstances, request
+        )
 
-        res = json_array_to_csv(response.body.items.dbinstance)
+        result = response.body.to_map()
+        current_page_ins = result.get('Items', {}).get('DBInstance', [])
+
+        _convert_info(current_page_ins)
+        return result
+
+    async def _fetch_db_instance_perf(client, ins_list, page_size):
+        instance_ids = [ins['DBInstanceId'] for ins in ins_list]
+        perf_data_map = {}
+        perf_request = rds_20140815_models.DescribeDBInstancesByPerformanceRequest(
+            region_id=region_id,
+            dbinstance_id=(",".join(instance_ids)),
+            page_size=page_size,
+            page_number=1
+        )
+
+        perf_response = await to_thread.run_sync(
+            client.describe_dbinstances_by_performance, perf_request
+        )
+
+        perf_result = perf_response.body.to_map()
+        perf_instances = perf_result.get('Items', {}).get('DBInstancePerformance', [])
+
+        # 处理性能数据，向上取整
+        for perf_ins in perf_instances:
+            processed_perf = {}
+            for key in perf_keys:
+                try:
+                    processed_perf[key] = math.ceil(float(perf_ins.get(key, 0)))
+                except (ValueError, TypeError):
+                    processed_perf[key] = 0
+            perf_data_map[perf_ins['DBInstanceId']] = processed_perf
+
+        for ins in ins_list:
+            ins_id = ins['DBInstanceId']
+            if ins_id in perf_data_map:
+                ins.update(perf_data_map[ins_id])
+            else:
+                # 如果没有性能数据，填充默认值
+                for key in perf_keys:
+                    ins[key] = 0
+
+    def _filter_ins(ins_list):
+        _db_instances = []
+        if filter_columns:
+            _db_instances.extend([{col: ins.get(col) for col in filter_columns} for ins in ins_list])
+        else:
+            _db_instances.extend(current_page_ins)
+        return _db_instances
+
+    async def _fetch(need_perf_data, page_num, page_size):
+        _client = get_rds_client(region_id)
+        logging.info(f"start {page_num} fetch_ins")
+        page_result = await _fetch_db_instances(_client, page_num, page_size)
+        total_record_count = page_result.get('TotalRecordCount', 0)
+        page_instances = page_result.get('Items', {}).get('DBInstance', [])
+        # 如果需要性能数据，则获取当前页实例的性能信息
+        if need_perf_data:
+            logging.info(f"start {page_num} fetch_perf")
+            # 获取当前页实例ID列表
+            await _fetch_db_instance_perf(_client, page_instances, page_size)
+        return total_record_count, _filter_ins(page_instances)
+
+    if filter_columns:
+        available_columns = "BlueGreenDeploymentName,BlueInstanceName,Category,ConnectionMode,ConnectionString,CreateTime,DBInstanceCPU,DBInstanceClass,DBInstanceDescription,DBInstanceId,DBInstanceMemory,DBInstanceNetType,DBInstanceStatus,DBInstanceStorageType,DBInstanceType,DeletionProtection,Engine,EngineVersion,ExpireTime,GreenInstanceName,InsId,InstanceNetworkType,IsAnalyticReadOnlyIns,LockMode,LockReason,MasterInstanceId,MutriORsignle,PayType,ReadOnlyDBInstanceIds,RegionId,ResourceGroupId,TipsLevel,VSwitchId,VpcCloudInstanceId,VpcId,ZoneId,CPUUsage,IOPSUsage,DiskUsage,SessionUsage"
+        available_columns = available_columns.split(",")
+        for column in filter_columns:
+            if column not in available_columns:
+                return f"Invalid column '{column}'. Available columns are: {available_columns}"
+
+    # 检查是否需要获取性能数据
+    perf_keys = ["CPUUsage", "DiskUsage", "IOPSUsage", "SessionUsage"]
+    need_perf_data = not filter_columns or any(key in filter_columns for key in perf_keys)
+
+    page_size = 100
+    db_instances = []
+    try:
+        logging.info("start first describe_db_instances")
+        # First call to get TotalRecordCount
+
+        total_record_count, result = await _fetch(need_perf_data, 1, page_size)
+        db_instances.extend(result)
+
+        # Calculate total pages and create concurrent tasks
+        if total_record_count > page_size:
+            total_pages = (total_record_count + page_size - 1) // page_size
+            # Create tasks for remaining pages (page 2 onwards)
+            # Process pages concurrently with a semaphore to limit concurrency
+            semaphore = anyio.Semaphore(16)
+            results = []
+
+            async def fetch_page_limited(page_num):
+                async with semaphore:
+                    _total_record_count, page_instances = await _fetch(need_perf_data, page_num, page_size)
+                    results.extend(page_instances)
+                    logging.info(f"end {page_num} fetch_page")
+
+            async with anyio.create_task_group() as tg:
+                for page_num in range(2, total_pages + 1):
+                    tg.start_soon(fetch_page_limited, page_num)
+
+            db_instances.extend(results)
+
+        res = json_array_to_csv(db_instances)
         if not res:
             return "No RDS instances found."
+        if res and sql:
+            res = json_exec_sql(db_instances, sql)
+            res = json_array_to_csv(res)
         return res
     except Exception as e:
+        logging.exception("request failed.")
         raise e
 
 
@@ -1642,9 +1792,107 @@ async def query_sql(
         the sql result.
     """
     try:
-        async with DBService(region_id, dbinstance_id, db_name) as service:
+        if db_name == 'information_schema':
+            client = get_rds_client(region_id)
+            databases = _get_db_instance_databases_str(client, region_id, dbinstance_id)
+        else:
+            databases = db_name
+        async with DBService(region_id, dbinstance_id, databases) as service:
             return await service.execute_sql(sql=sql)
     except Exception as e:
+        logger.error(f"Error occurred: {str(e)}")
+        raise e
+    
+@mcp.tool(annotations=READ_ONLY_TOOL,
+          description="Query the top few tables with the highest space occupancy")
+async def show_largest_table(
+        region_id: str = Field(description="The region ID of the RDS instance."),
+        dbinstance_id: str = Field(description="The ID of the RDS instance."),
+        topK: int = Field(default=5, description="To display the number of the top few largest tables")
+) -> str:
+    """
+    Returns:
+        The data table with the largest storage space.
+    """
+    try:
+        client = get_rds_client(region_id)
+        request = rds_20140815_models.DescribeDBInstanceAttributeRequest(dbinstance_id=dbinstance_id)
+        response = client.describe_dbinstance_attribute(request)
+        result = response.body.to_map()
+
+        db_type = result['Items']['DBInstanceAttribute'][0]['Engine']
+        db_version = result['Items']['DBInstanceAttribute'][0]['EngineVersion']
+        if db_type.lower() != 'mysql' and db_version not in ["5.6", "5.7", "8.0"]:
+            return f"Unsupported db version {db_version}."
+
+        databases = _get_db_instance_databases_str(client, region_id, dbinstance_id)
+        # 构建SQL
+        # 限制展示最大表数量的上限
+        topK = min(topK, 100)
+        base_query = f"""
+                SELECT 
+                  table_schema AS '数据库',
+                  table_name AS '表名',
+                  ROUND((data_length + index_length) / 1024 / 1024, 2) AS '总大小(MB)',
+                  ROUND(INDEX_LENGTH / 1024 / 1024, 2) AS '索引大小(MB)',
+                  table_rows AS '行数'
+                FROM information_schema.TABLES
+                ORDER BY (data_length + index_length) DESC
+                Limit {topK};
+            """
+
+        async with DBService(region_id, dbinstance_id, databases) as service:
+            return await service.execute_sql(sql=base_query)
+    except Exception as e:
+        logger.exception("show largest table failed.")
+        logger.error(f"Error occurred: {str(e)}")
+        raise e
+
+
+@mcp.tool(annotations=READ_ONLY_TOOL,
+          description="Query the tables with the largest table fragments")
+async def show_largest_table_fragment(
+        region_id: str = Field(description="The region ID of the RDS instance."),
+        dbinstance_id: str = Field(description="The ID of the RDS instance."),
+        topK: int = Field(default=5, description="To display the number of the top few largest tables")
+) -> str:
+    """
+    Returns:
+        The largest fragmented data table.
+    """
+    try:
+        client = get_rds_client(region_id)
+        request = rds_20140815_models.DescribeDBInstanceAttributeRequest(dbinstance_id=dbinstance_id)
+        response = client.describe_dbinstance_attribute(request)
+        result = response.body.to_map()
+
+        db_type = result['Items']['DBInstanceAttribute'][0]['Engine']
+        db_version = result['Items']['DBInstanceAttribute'][0]['EngineVersion']
+        if db_type.lower() != 'mysql' and db_version not in ["5.6", "5.7", "8.0"]:
+            return f"Unsupported db version {db_version}."
+
+        databases = _get_db_instance_databases_str(client, region_id, dbinstance_id)
+        # 构建SQL
+        # 限制展示最大表数量的上限
+        topK = min(topK, 100)
+        base_query = f"""
+                SELECT 
+                  ENGINE,
+                  TABLE_SCHEMA,
+                  TABLE_NAME,
+                  ROUND(DATA_LENGTH / 1024 / 1024,2) AS '总大小(MB)',
+                  ROUND(INDEX_LENGTH / 1024 / 1024,2) AS '索引大小(MB)',
+                  ROUND(DATA_FREE / 1024 / 1024,2) AS '碎片大小(MB)'
+                FROM information_schema.TABLES
+                WHERE DATA_FREE > 0
+                ORDER BY DATA_FREE DESC
+                Limit {topK};
+            """
+
+        async with DBService(region_id, dbinstance_id, databases) as service:
+            return await service.execute_sql(sql=base_query)
+    except Exception as e:
+        logger.exception("show largest table failed.")
         logger.error(f"Error occurred: {str(e)}")
         raise e
 
@@ -1762,6 +2010,24 @@ def _parse_groups_from_source(source: str | None) -> List[str]:
             if g_to_add not in expanded_groups:
                 expanded_groups.append(g_to_add)
     return expanded_groups or [DEFAULT_TOOL_GROUP]
+
+def _get_db_instance_databases_str(
+        client: RdsClient,
+        region_id: str,
+        db_instance_id: str
+) -> str:
+    try:
+        client = get_rds_client(region_id)
+        request = rds_20140815_models.DescribeDatabasesRequest(
+            dbinstance_id=db_instance_id
+        )
+        response = client.describe_databases(request)
+        databases_info = response.body.databases.database
+
+        result = ",".join([database.dbname for database in databases_info])
+        return result
+    except Exception as e:
+        raise e
 
 
 if __name__ == "__main__":
