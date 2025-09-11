@@ -1796,8 +1796,8 @@ async def query_sql(
             client = get_rds_client(region_id)
             databases = _get_db_instance_databases_str(client, region_id, dbinstance_id)
         else:
-            databases = db_name
-        async with DBService(region_id, dbinstance_id, databases) as service:
+            databases = None
+        async with DBService(region_id, dbinstance_id, db_name, databases) as service:
             return await service.execute_sql(sql=sql)
     except Exception as e:
         logger.error(f"Error occurred: {str(e)}")
@@ -1825,6 +1825,7 @@ async def show_largest_table(
         if db_type.lower() != 'mysql' and db_version not in ["5.6", "5.7", "8.0"]:
             return f"Unsupported db version {db_version}."
 
+        db_name = 'information_schema'
         databases = _get_db_instance_databases_str(client, region_id, dbinstance_id)
         # 构建SQL
         # 限制展示最大表数量的上限
@@ -1841,7 +1842,7 @@ async def show_largest_table(
                 Limit {topK};
             """
 
-        async with DBService(region_id, dbinstance_id, databases) as service:
+        async with DBService(region_id, dbinstance_id, db_name, databases) as service:
             return await service.execute_sql(sql=base_query)
     except Exception as e:
         logger.exception("show largest table failed.")
@@ -1871,6 +1872,7 @@ async def show_largest_table_fragment(
         if db_type.lower() != 'mysql' and db_version not in ["5.6", "5.7", "8.0"]:
             return f"Unsupported db version {db_version}."
 
+        db_name = 'information_schema'
         databases = _get_db_instance_databases_str(client, region_id, dbinstance_id)
         # 构建SQL
         # 限制展示最大表数量的上限
@@ -1889,7 +1891,7 @@ async def show_largest_table_fragment(
                 Limit {topK};
             """
 
-        async with DBService(region_id, dbinstance_id, databases) as service:
+        async with DBService(region_id, dbinstance_id, db_name, databases) as service:
             return await service.execute_sql(sql=base_query)
     except Exception as e:
         logger.exception("show largest table failed.")

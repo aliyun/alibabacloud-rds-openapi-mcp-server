@@ -49,10 +49,12 @@ class DBService:
     def __init__(self,
                  region_id,
                  instance_id,
-                 database=None, ):
+                 database=None,
+                 privilege_databases=None):
         self.instance_id = instance_id
         self.database = database
         self.region_id = region_id
+        self.privilege_databases = privilege_databases
 
         self.__db_type = None
         self.__account_name, self.__account_password = get_rds_account()
@@ -126,11 +128,22 @@ class DBService:
         self.__client.create_account(request)
 
     def _grant_privilege(self):
+        if self.privilege_databases:
+            dbname = self.privilege_databases
+            cnt = len(self.privilege_databases.split(','))
+            if self.db_type.lower() in ('mysql', 'postgresql'):
+                privilege = ",".join(['ReadOnly' for i in range(cnt)])
+            else:
+                privilege = ",".join(['DBOwner' for i in range(cnt)])
+        else:
+            dbname = self.database
+            privilege = "ReadOnly" if self.db_type.lower() in ('mysql', 'postgresql') else "DBOwner"
+
         req = rds_20140815_models.GrantAccountPrivilegeRequest(
             dbinstance_id=self.instance_id,
             account_name=self.account_name,
-            dbname=self.database,
-            account_privilege="ReadOnly" if self.db_type.lower() in ('mysql', 'postgresql') else "DBOwner"
+            dbname=dbname,
+            account_privilege=privilege
         )
         self.__client.grant_account_privilege(req)
 
