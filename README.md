@@ -119,7 +119,7 @@ Add the following configuration to the MCP client configuration file:
 * `describe_db_instance_net_info`: Batch retrieves network configuration details for multiple RDS instances.
 * `describe_db_instance_parameters`: Batch retrieves parameter information for multiple RDS instances.
 * `describe_db_instance_performance`: Queries the performance data of an instance.
-* `describe_db_instances`: Queries instances.
+* `describe_db_instances`: Queries instances. Support passing SQL for data analysis and statistics
 * `describe_error_logs`: Queries the error log of an instance.
 * `describe_instance_linked_whitelist_template`: Query the whitelist template list.
 * `describe_monitor_metrics`: Queries performance and diagnostic metrics for an instance using the DAS (Database Autonomy Service) API.
@@ -139,6 +139,8 @@ Add the following configuration to the MCP client configuration file:
 * `explain_sql`: Execute sql `explain` and return sql result.
 * `show_engine_innodb_status`: Execute sql `show engine innodb status` and return sql result.
 * `show_create_table`: Execute sql `show create table` and return sql result.
+* `show_largest_table`: Query the top few tables with the highest space occupancy.
+* `show_largest_table_fragment`: Query the tables with the largest table fragments.
 * `query_sql`: Execute read-only sql and return sql result.
 
 ### Toolsets

@@ -116,7 +116,7 @@ git clone https://github.com/aliyun/alibabacloud-rds-openapi-mcp-server.git
 * `describe_db_instance_net_info`: 批量查询多个RDS实例的网络配置详情
 * `describe_db_instance_parameters`: 批量查询多个RDS实例的参数信息
 * `describe_db_instance_performance`: 查询实例性能数据
-* `describe_db_instances`: 查询实例
+* `describe_db_instances`: 查询实例，支持传入sql进行数据分析和统计
 * `describe_error_logs`: 查询实例错误日志
 * `describe_instance_linked_whitelist_template`: 查询绑定到实例的白名单模板列表
 * `describe_monitor_metrics`: 通过 DAS API 查询RDS实例监控指标
@@ -136,6 +136,8 @@ git clone https://github.com/aliyun/alibabacloud-rds-openapi-mcp-server.git
 * `explain_sql`：执行 SQL `explain` 命令并返回 SQL 执行计划结果。
 * `show_engine_innodb_status`：执行 SQL `show engine innodb status` 命令并返回 SQL 执行结果。
 * `show_create_table`：执行 SQL `show create table` 命令并返回 SQL 执行结果。
+* `show_largest_table`: 查询空间占用率最高的前几张表。
+* `show_largest_table_fragment`: 查询空间碎片率最高的前几张表。
 * `query_sql`：执行只读 SQL 语句并返回 SQL 执行结果。
 
 
