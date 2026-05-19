@@ -131,13 +131,10 @@ class DBService:
         if self.privilege_databases:
             dbname = self.privilege_databases
             cnt = len(self.privilege_databases.split(','))
-            if self.db_type.lower() in ('mysql', 'postgresql'):
-                privilege = ",".join(['ReadOnly' for i in range(cnt)])
-            else:
-                privilege = ",".join(['DBOwner' for i in range(cnt)])
+            privilege = ",".join(['ReadOnly' for i in range(cnt)])
         else:
             dbname = self.database
-            privilege = "ReadOnly" if self.db_type.lower() in ('mysql', 'postgresql') else "DBOwner"
+            privilege = "ReadOnly"
 
         req = rds_20140815_models.GrantAccountPrivilegeRequest(
             dbinstance_id=self.instance_id,
