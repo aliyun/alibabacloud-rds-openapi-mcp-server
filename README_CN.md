@@ -217,14 +217,6 @@ export MCP_TOOLSETS=rds,rds_mssql_custom
 - **安全性注意**:在执行任何操作时,需确保不会对客户的数据库造成负面影响。
 ```
 
-## 使用案例
-### mydba
-阿里云数据库 MyDBA 智能体(<a href="./component/mydba/README_cn.md">README_cn.md</a>)
-- 购买RDS  
-<img src="./assets/buy_rds_cn.gif" alt="购买RDS" width="500"/>
-- 诊断RDS  
-<img src="./assets/diagnose_cn.gif" alt="诊断RDS" width="500"/>
-
 ## 贡献指南
 欢迎贡献代码！请提交Pull Request：
 1. Fork 本仓库
