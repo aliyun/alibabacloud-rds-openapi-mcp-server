@@ -94,6 +94,8 @@ $env:ALIBABA_CLOUD_SECURITY_TOKEN="<您的STS安全令牌>"
 
 # 当 SERVER_HOST 监听非本地地址时必须配置
 $env:API_KEY="<您的 MCP Server API Key>"
+$env:ENABLE_WRITE_TOOLS="false"
+$env:ALLOW_HEADER_CREDENTIALS="false"
 ```
 
 #### 命令提示符(CMD)配置
@@ -111,6 +113,8 @@ set ALIBABA_CLOUD_SECURITY_TOKEN=<您的STS安全令牌>
 
 REM 当 SERVER_HOST 监听非本地地址时必须配置
 set API_KEY=<您的 MCP Server API Key>
+set ENABLE_WRITE_TOOLS=false
+set ALLOW_HEADER_CREDENTIALS=false
 ```
 
 > ⚠️ **重要提示**: 请将`<占位符>`替换为您的真实凭证信息。这些环境变量仅在当前终端会话中有效。

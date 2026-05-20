@@ -56,6 +56,8 @@ export ALIBABA_CLOUD_ACCESS_KEY_ID=$you_access_id;
 export ALIBABA_CLOUD_ACCESS_KEY_SECRET=$you_access_key;
 export ALIBABA_CLOUD_SECURITY_TOKEN=$you_sts_security_token; # optional, required when using STS Token 
 export API_KEY=$you_mcp_server_api_key; # Required when SERVER_HOST is not a loopback address.
+export ENABLE_WRITE_TOOLS=false; # Set true only when intentionally exposing write-capable tools on a non-loopback host.
+export ALLOW_HEADER_CREDENTIALS=false; # Default false. Set true only in trusted deployments that require per-request credentials.
 
 # run mcp server
 uvx alibabacloud-rds-openapi-mcp-server@latest
@@ -71,6 +73,7 @@ And then configure the Cline.
 ```shell
 remote_server = "http://127.0.0.1:8000/sse";
 ```
+When `API_KEY` is configured, MCP clients must send `Authorization: Bearer <API_KEY>`.
 
 > If you encounter a `401 Incorrect API key provided` error when using Qwen, please refer to the [documentation](https://help.aliyun.com/zh/model-studio/cline) for solutions.
 

@@ -23,9 +23,28 @@ class FakeDBService:
     async def __aexit__(self, exc_type, exc_val, exc_tb):
         return False
 
-    async def execute_sql(self, sql):
-        FakeDBService.calls.append(("execute", sql))
+    async def execute_sql(self, sql, params=None):
+        FakeDBService.calls.append(("execute", sql, params))
         return sql
+
+
+class FakeRdsClient:
+    def describe_dbinstance_attribute(self, _request):
+        class Body:
+            @staticmethod
+            def to_map():
+                return {
+                    "Items": {
+                        "DBInstanceAttribute": [
+                            {"Engine": "MySQL", "EngineVersion": "8.0"}
+                        ]
+                    }
+                }
+
+        class Response:
+            body = Body()
+
+        return Response()
 
 
 @pytest.fixture(autouse=True)
@@ -126,3 +145,29 @@ def test_explain_sql_allows_select_sql():
     )
 
     assert result == "explain select * from users"
+
+
+def test_show_largest_table_parameterizes_topk(monkeypatch):
+    monkeypatch.setattr(server, "get_rds_client", lambda _region_id: FakeRdsClient())
+    monkeypatch.setattr(server, "_get_db_instance_databases_str", lambda *_args: "app_db")
+
+    asyncio.run(server.show_largest_table("cn-hangzhou", "rm-test", 1000))
+
+    execute_calls = [call for call in FakeDBService.calls if call[0] == "execute"]
+    assert execute_calls
+    _, sql, params = execute_calls[-1]
+    assert "Limit %s" in sql
+    assert params == (100,)
+
+
+def test_show_largest_table_fragment_parameterizes_topk(monkeypatch):
+    monkeypatch.setattr(server, "get_rds_client", lambda _region_id: FakeRdsClient())
+    monkeypatch.setattr(server, "_get_db_instance_databases_str", lambda *_args: "app_db")
+
+    asyncio.run(server.show_largest_table_fragment("cn-hangzhou", "rm-test", 1000))
+
+    execute_calls = [call for call in FakeDBService.calls if call[0] == "execute"]
+    assert execute_calls
+    _, sql, params = execute_calls[-1]
+    assert "Limit %s" in sql
+    assert params == (100,)

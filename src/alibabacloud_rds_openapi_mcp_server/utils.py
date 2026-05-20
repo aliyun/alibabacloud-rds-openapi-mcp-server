@@ -13,6 +13,7 @@ from alibabacloud_vpc20160428.client import Client as VpcClient
 from alibabacloud_das20200116.client import Client as DAS20200116Client
 
 current_request_headers: ContextVar[dict] = ContextVar("current_request_headers", default={})
+TRUE_ENV_VALUES = {"1", "true", "yes", "on"}
 
 PERF_KEYS = {
     "mysql": {
@@ -189,6 +190,8 @@ def convert_datetime_to_timestamp(date_str):
 
 
 def get_rds_account():
+    if not _header_credentials_allowed():
+        return None, None
     header = current_request_headers.get()
     user = header.get("rds_user") if header else None
     passwd = header.get("rds_passwd") if header else None
@@ -202,9 +205,13 @@ def get_aksk():
     sk = os.getenv('ALIBABA_CLOUD_ACCESS_KEY_SECRET')
     sts = os.getenv('ALIBABA_CLOUD_SECURITY_TOKEN')
     header = current_request_headers.get()
-    if header and (header.get("ak") or header.get("sk") or header.get("sts")):
+    if _header_credentials_allowed() and header and (header.get("ak") or header.get("sk") or header.get("sts")):
         ak, sk, sts = header.get("ak"), header.get("sk"), header.get("sts")
     return ak, sk, sts
+
+
+def _header_credentials_allowed() -> bool:
+    return os.getenv("ALLOW_HEADER_CREDENTIALS", "").strip().lower() in TRUE_ENV_VALUES
 
 
 def get_rds_client(region_id: str):

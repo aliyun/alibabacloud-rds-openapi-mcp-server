@@ -9,11 +9,19 @@ dependencies = [
     "alibabacloud-das20200116==2.7.1",
     "alibabacloud-rds20140815>=11.0.0",
     "alibabacloud-vpc20160428>=6.11.4",
+    "aiohttp>=3.13.4",
+    "cryptography>=46.0.7",
+    "h11>=0.16.0",
     "httpx>=0.28.1",
-    "mcp[cli]>=1.11.0",
+    "idna>=3.15",
+    "mcp>=1.26.0",
+    "pyjwt>=2.12.1",
+    "python-dotenv>=1.2.2",
+    "python-multipart>=0.0.27",
 #    "psycopg2>=2.9.10",
     "pymysql>=1.1.1",
     "pyodbc>=5.2.0",
+    "urllib3>=2.7.0",
 ]
 
 license = "Apache-2.0"

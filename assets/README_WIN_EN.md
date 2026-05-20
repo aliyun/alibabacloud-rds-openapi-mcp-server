@@ -94,6 +94,8 @@ $env:ALIBABA_CLOUD_SECURITY_TOKEN="<Your STS Security Token>"
 
 # Required when SERVER_HOST binds to a non-loopback address
 $env:API_KEY="<Your MCP Server API Key>"
+$env:ENABLE_WRITE_TOOLS="false"
+$env:ALLOW_HEADER_CREDENTIALS="false"
 ```
 
 #### Command Prompt (CMD) Configuration
@@ -111,6 +113,8 @@ set ALIBABA_CLOUD_SECURITY_TOKEN=<Your STS Security Token>
 
 REM Required when SERVER_HOST binds to a non-loopback address
 set API_KEY=<Your MCP Server API Key>
+set ENABLE_WRITE_TOOLS=false
+set ALLOW_HEADER_CREDENTIALS=false
 ```
 
 > ⚠️ **Important**: Please replace `<placeholders>` with your actual credential information. These environment variables are only valid for the current terminal session.

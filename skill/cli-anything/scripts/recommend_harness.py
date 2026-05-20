@@ -1,6 +1,6 @@
 #!/usr/bin/env python3
+import importlib.util
 import json
-import subprocess
 from pathlib import Path
 
 INSPECT = Path('/root/.openclaw/workspace/skills/cli-anything/scripts/inspect_cli_anything.py')
@@ -25,8 +25,7 @@ def score(item):
 
 
 def main():
-    raw = subprocess.check_output(['python3', str(INSPECT)], text=True)
-    data = json.loads(raw)
+    data = inspect_cli_anything()
     harnesses = data.get('harnesses', [])
     ranked = []
     for item in harnesses:
@@ -40,6 +39,19 @@ def main():
         'best': ranked[0] if ranked else None,
     }
     print(json.dumps(out, ensure_ascii=False, indent=2))
+
+
+def inspect_cli_anything():
+    spec = importlib.util.spec_from_file_location('inspect_cli_anything', INSPECT)
+    if spec is None or spec.loader is None:
+        return {'repo_exists': False, 'harnesses': []}
+    module = importlib.util.module_from_spec(spec)
+    spec.loader.exec_module(module)
+    return {
+        'repo_exists': module.ROOT.exists(),
+        'repo_path': str(module.ROOT),
+        'harnesses': module.detect_harnesses(module.ROOT),
+    }
 
 
 if __name__ == '__main__':

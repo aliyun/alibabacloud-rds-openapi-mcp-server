@@ -75,11 +75,7 @@ export DINGTALK_APP_CLIENT_ID="your_dingtalk_client_id"
 export DINGTALK_APP_CLIENT_SECRET="your_dingtalk_client_secret"
 ```
 
-也可通过命令行参数传入钉钉凭证（会覆盖环境变量）：
-
-```bash
-python main.py --client_id="your_dingtalk_client_id" --client_secret="your_dingtalk_client_secret"
-```
+不要通过命令行传入 `DINGTALK_APP_CLIENT_SECRET`，避免 secret 出现在 shell history 或进程列表中。
 
 ### 3. 启动服务
 
