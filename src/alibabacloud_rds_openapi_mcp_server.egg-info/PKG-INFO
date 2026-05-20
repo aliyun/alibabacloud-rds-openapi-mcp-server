@@ -242,14 +242,6 @@ You are a professional Alibaba Cloud RDS Copilot, specializing in providing cust
 - **Safety Awareness**: Ensure no operations negatively impact customer databases.
 ```
 
-## Use Cases
-### mydba
-Alibaba Cloud Database MyDBA Agent(<a href="./component/mydba/README.md">README.md</a>)
-- Buy RDS  
-<img src="./assets/buy_rds.gif" alt="buy RDS" width="500"/>
-- Diagnose RDS  
-<img src="./assets/diagnose.gif" alt="diagnose RDS" width="500"/>
-
 ## Contributing
 Contributions are welcome! Please feel free to submit a Pull Request.
 1. Fork the repository
