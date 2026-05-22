@@ -51,10 +51,13 @@ RDS OpenAPI MCP服务。
 ```shell
 # 设置环境变量
 export SERVER_TRANSPORT=sse;
+export SERVER_HOST=127.0.0.1; # 默认值：127.0.0.1。监听非本地地址时必须配置 API_KEY。
 export ALIBABA_CLOUD_ACCESS_KEY_ID=$your_access_id;  # 替换为你的access_id
 export ALIBABA_CLOUD_ACCESS_KEY_SECRET=$your_access_key;  # 替换为你的access_key
 export ALIBABA_CLOUD_SECURITY_TOKEN=$your_sts_security_token; # 可选项，使用sts token鉴权时填写
-export API_KEY=$you_mcp_server_api_key; # 可选，配置后支持API Key鉴权.
+export API_KEY=$you_mcp_server_api_key; # 当 SERVER_HOST 不是本地回环地址时必填。
+export ENABLE_WRITE_TOOLS=false; # 仅在确认需要对非本地地址暴露写操作工具时设置为 true。
+export ALLOW_HEADER_CREDENTIALS=false; # 默认 false。仅在可信部署中需要按请求传入凭证时设置为 true。
 
 # 启动MCP服务
 uvx alibabacloud-rds-openapi-mcp-server@latest
@@ -64,12 +67,13 @@ uvx alibabacloud-rds-openapi-mcp-server@latest
 INFO:     Started server process [91594]
 INFO:     Waiting for application startup.
 INFO:     Application startup complete.
-INFO:     Uvicorn running on http://0.0.0.0:8000 (Press CTRL+C to quit)
+INFO:     Uvicorn running on http://127.0.0.1:8000 (Press CTRL+C to quit)
 ```
 然后在Cline中配置：
 ```shell
 remote_server = "http://127.0.0.1:8000/sse";
 ```
+配置 `API_KEY` 后，MCP 客户端必须发送 `Authorization: Bearer <API_KEY>`。
 
 > 如果使用Qwen遇到`401 Incorrect API key provided`错误，请参考[文档](https://help.aliyun.com/zh/model-studio/cline)解决。
 
@@ -133,12 +137,12 @@ git clone https://github.com/aliyun/alibabacloud-rds-openapi-mcp-server.git
 ### SQL 工具
 > MCP 服务器将自动创建一个只读账户，执行 SQL 语句，然后自动删除该账户。此过程要求 MCP 服务器能够连接到数据库实例。
 
-* `explain_sql`：执行 SQL `explain` 命令并返回 SQL 执行计划结果。
+* `explain_sql`：对单条 `SELECT` 语句执行 SQL `EXPLAIN` 命令并返回 SQL 执行计划结果。
 * `show_engine_innodb_status`：执行 SQL `show engine innodb status` 命令并返回 SQL 执行结果。
-* `show_create_table`：执行 SQL `show create table` 命令并返回 SQL 执行结果。
+* `show_create_table`：对已校验的数据库名和表名执行 SQL `SHOW CREATE TABLE` 命令并返回 SQL 执行结果。
 * `show_largest_table`: 查询空间占用率最高的前几张表。
 * `show_largest_table_fragment`: 查询空间碎片率最高的前几张表。
-* `query_sql`：执行只读 SQL 语句并返回 SQL 执行结果。
+* `query_sql`：执行单条只读 SQL 语句（`SELECT`、`SHOW`、`DESCRIBE` 或 `EXPLAIN`）并返回 SQL 执行结果。
 
 
 #### 工具集分组

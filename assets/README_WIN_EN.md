@@ -83,6 +83,7 @@ Before starting the MCP server, you need to set the necessary environment variab
 ```powershell
 # Set server transport mode
 $env:SERVER_TRANSPORT="sse"
+$env:SERVER_HOST="127.0.0.1"
 
 # Set Alibaba Cloud credentials
 $env:ALIBABA_CLOUD_ACCESS_KEY_ID="<Your AccessKey ID>"
@@ -90,12 +91,18 @@ $env:ALIBABA_CLOUD_ACCESS_KEY_SECRET="<Your AccessKey Secret>"
 
 # Optional: Set STS Token when using temporary credentials
 $env:ALIBABA_CLOUD_SECURITY_TOKEN="<Your STS Security Token>"
+
+# Required when SERVER_HOST binds to a non-loopback address
+$env:API_KEY="<Your MCP Server API Key>"
+$env:ENABLE_WRITE_TOOLS="false"
+$env:ALLOW_HEADER_CREDENTIALS="false"
 ```
 
 #### Command Prompt (CMD) Configuration
 ```cmd
 REM Set server transport mode
 set SERVER_TRANSPORT=sse
+set SERVER_HOST=127.0.0.1
 
 REM Set Alibaba Cloud credentials
 set ALIBABA_CLOUD_ACCESS_KEY_ID=<Your AccessKey ID>
@@ -103,6 +110,11 @@ set ALIBABA_CLOUD_ACCESS_KEY_SECRET=<Your AccessKey Secret>
 
 REM Optional: Set STS Token when using temporary credentials
 set ALIBABA_CLOUD_SECURITY_TOKEN=<Your STS Security Token>
+
+REM Required when SERVER_HOST binds to a non-loopback address
+set API_KEY=<Your MCP Server API Key>
+set ENABLE_WRITE_TOOLS=false
+set ALLOW_HEADER_CREDENTIALS=false
 ```
 
 > ⚠️ **Important**: Please replace `<placeholders>` with your actual credential information. These environment variables are only valid for the current terminal session.
@@ -116,7 +128,7 @@ After successful startup, you will see output similar to the following:
 INFO: Started server process [Process ID]
 INFO: Waiting for application startup.
 INFO: Application startup complete.
-INFO: Uvicorn running on http://0.0.0.0:8000 (Press CTRL+C to quit)
+INFO: Uvicorn running on http://127.0.0.1:8000 (Press CTRL+C to quit)
 ```
 
 ### Test Installation

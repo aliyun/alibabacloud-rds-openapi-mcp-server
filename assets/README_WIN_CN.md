@@ -83,6 +83,7 @@
 ```powershell
 # 设置服务器传输模式
 $env:SERVER_TRANSPORT="sse"
+$env:SERVER_HOST="127.0.0.1"
 
 # 设置阿里云凭证
 $env:ALIBABA_CLOUD_ACCESS_KEY_ID="<您的AccessKey ID>"
@@ -90,12 +91,18 @@ $env:ALIBABA_CLOUD_ACCESS_KEY_SECRET="<您的AccessKey Secret>"
 
 # 可选：使用临时凭证时设置STS Token
 $env:ALIBABA_CLOUD_SECURITY_TOKEN="<您的STS安全令牌>"
+
+# 当 SERVER_HOST 监听非本地地址时必须配置
+$env:API_KEY="<您的 MCP Server API Key>"
+$env:ENABLE_WRITE_TOOLS="false"
+$env:ALLOW_HEADER_CREDENTIALS="false"
 ```
 
 #### 命令提示符(CMD)配置
 ```cmd
 REM 设置服务器传输模式
 set SERVER_TRANSPORT=sse
+set SERVER_HOST=127.0.0.1
 
 REM 设置阿里云凭证
 set ALIBABA_CLOUD_ACCESS_KEY_ID=<您的AccessKey ID>
@@ -103,6 +110,11 @@ set ALIBABA_CLOUD_ACCESS_KEY_SECRET=<您的AccessKey Secret>
 
 REM 可选：使用临时凭证时设置STS Token
 set ALIBABA_CLOUD_SECURITY_TOKEN=<您的STS安全令牌>
+
+REM 当 SERVER_HOST 监听非本地地址时必须配置
+set API_KEY=<您的 MCP Server API Key>
+set ENABLE_WRITE_TOOLS=false
+set ALLOW_HEADER_CREDENTIALS=false
 ```
 
 > ⚠️ **重要提示**: 请将`<占位符>`替换为您的真实凭证信息。这些环境变量仅在当前终端会话中有效。
@@ -116,7 +128,7 @@ set ALIBABA_CLOUD_SECURITY_TOKEN=<您的STS安全令牌>
 INFO: Started server process [进程ID]
 INFO: Waiting for application startup.
 INFO: Application startup complete.
-INFO: Uvicorn running on http://0.0.0.0:8000 (Press CTRL+C to quit)
+INFO: Uvicorn running on http://127.0.0.1:8000 (Press CTRL+C to quit)
 ```
 
 ### 测试安装
@@ -320,4 +332,3 @@ Cherry Studio是一款集成了多种大语言模型的跨平台AI客户端，�
 - MariaDB
 
 </details>
-

@@ -1,6 +1,6 @@
 import asyncio
 import json
-import random
+import secrets
 import socket
 import string
 
@@ -12,26 +12,28 @@ from utils import get_rds_client, get_rds_account
 
 def random_str(length=8):
     chars = string.ascii_lowercase + string.digits
-    return ''.join(random.choice(chars) for _ in range(length))
+    return ''.join(secrets.choice(chars) for _ in range(length))
 
 
 def random_password(length=32):
+    if length < 4:
+        raise ValueError("Password length must be at least 4 characters.")
     U = string.ascii_uppercase
     L = string.ascii_lowercase
     D = string.digits
     S = '_!@#$%^&*()-+='
     pool = U + L + D + S
-    for _ in range(1000):
-        # 确保至少三类
-        chosen = [
-            random.choice(U),
-            random.choice(L),
-            random.choice(D),
-            random.choice(S)
-        ]
-        rest = [random.choice(pool) for _ in range(length - len(chosen))]
-        pw = ''.join(random.sample(chosen + rest, length))
-    return pw
+    # Include all required character classes, then shuffle with a CSPRNG.
+    chars = [
+        secrets.choice(U),
+        secrets.choice(L),
+        secrets.choice(D),
+        secrets.choice(S)
+    ]
+    chars.extend(secrets.choice(pool) for _ in range(length - len(chars)))
+    secure_random = secrets.SystemRandom()
+    secure_random.shuffle(chars)
+    return ''.join(chars)
 
 
 def test_connect(host, port, timeout=1):
@@ -131,13 +133,10 @@ class DBService:
         if self.privilege_databases:
             dbname = self.privilege_databases
             cnt = len(self.privilege_databases.split(','))
-            if self.db_type.lower() in ('mysql', 'postgresql'):
-                privilege = ",".join(['ReadOnly' for i in range(cnt)])
-            else:
-                privilege = ",".join(['DBOwner' for i in range(cnt)])
+            privilege = ",".join(['ReadOnly' for i in range(cnt)])
         else:
             dbname = self.database
-            privilege = "ReadOnly" if self.db_type.lower() in ('mysql', 'postgresql') else "DBOwner"
+            privilege = "ReadOnly"
 
         req = rds_20140815_models.GrantAccountPrivilegeRequest(
             dbinstance_id=self.instance_id,
@@ -156,8 +155,8 @@ class DBService:
         )
         self.__client.delete_account(req)
 
-    async def execute_sql(self, sql):
-        return await asyncio.to_thread(self.__db_conn.execute_sql, sql)
+    async def execute_sql(self, sql, params=None):
+        return await asyncio.to_thread(self.__db_conn.execute_sql, sql, params)
 
     @property
     def user(self):
@@ -215,9 +214,12 @@ class DBConn:
                 print(e)
             self.conn = None
 
-    def execute_sql(self, sql):
+    def execute_sql(self, sql, params=None):
         cursor = self.conn.cursor()
-        cursor.execute(sql)
+        if params is None:
+            cursor.execute(sql)
+        else:
+            cursor.execute(sql, params)
         columns = [desc[0] for desc in cursor.description]
         rows = cursor.fetchall()
         if self.dbtype == 'mysql':

@@ -1,4 +1,6 @@
 import argparse
+import hmac
+import ipaddress
 import json
 import logging
 import os
@@ -46,8 +48,12 @@ from utils import (transform_to_iso_8601,
                    get_vpc_client,
                    get_bill_client, get_das_client, convert_datetime_to_timestamp, current_request_headers)
 from alibabacloud_rds_openapi_mcp_server.core.mcp import RdsMCP
+from alibabacloud_rds_openapi_mcp_server.sql_safety import SqlSafetyValidator
 
 DEFAULT_TOOL_GROUP = 'rds'
+DEFAULT_SERVER_HOST = "127.0.0.1"
+WRITE_CAPABLE_TOOL_GROUPS = {"rds", "rds_custom_action"}
+TRUE_ENV_VALUES = {"1", "true", "yes", "on"}
 
 logger = logging.getLogger(__name__)
 mcp = RdsMCP("Alibaba Cloud RDS OPENAPI", port=os.getenv("SERVER_PORT", 8000), stateless_http=True)
@@ -1595,8 +1601,10 @@ async def show_create_table(
         the sql result.
     """
     try:
+        quoted_db_name = SqlSafetyValidator.quote_identifier(db_name, "db_name")
+        quoted_table_name = SqlSafetyValidator.quote_identifier(table_name, "table_name")
         async with DBService(region_id, dbinstance_id, db_name) as service:
-            return await service.execute_sql(f"show create table {db_name}.{table_name}")
+            return await service.execute_sql(f"show create table {quoted_db_name}.{quoted_table_name}")
     except Exception as e:
         logger.error(f"Error occurred: {str(e)}")
         raise e
@@ -1619,8 +1627,9 @@ async def explain_sql(
         the sql execute plan.
     """
     try:
+        safe_sql = SqlSafetyValidator.validate_explain_sql(sql)
         async with DBService(region_id, dbinstance_id, db_name) as service:
-            return await service.execute_sql(f"explain {sql}")
+            return await service.execute_sql(f"explain {safe_sql}")
     except Exception as e:
         logger.error(f"Error occurred: {str(e)}")
         raise e
@@ -1644,13 +1653,14 @@ async def query_sql(
         the sql result.
     """
     try:
+        safe_sql = SqlSafetyValidator.validate_read_only_sql(sql)
         if db_name == 'information_schema':
             client = get_rds_client(region_id)
             databases = _get_db_instance_databases_str(client, region_id, dbinstance_id)
         else:
             databases = None
         async with DBService(region_id, dbinstance_id, db_name, databases) as service:
-            return await service.execute_sql(sql=sql)
+            return await service.execute_sql(sql=safe_sql)
     except Exception as e:
         logger.error(f"Error occurred: {str(e)}")
         raise e
@@ -1681,8 +1691,8 @@ async def show_largest_table(
         databases = _get_db_instance_databases_str(client, region_id, dbinstance_id)
         # 构建SQL
         # 限制展示最大表数量的上限
-        topK = min(topK, 100)
-        base_query = f"""
+        topK = max(1, min(int(topK), 100))
+        base_query = """
                 SELECT 
                   table_schema AS '数据库',
                   table_name AS '表名',
@@ -1691,11 +1701,11 @@ async def show_largest_table(
                   table_rows AS '行数'
                 FROM information_schema.TABLES
                 ORDER BY (data_length + index_length) DESC
-                Limit {topK};
+                Limit %s;
             """
 
         async with DBService(region_id, dbinstance_id, db_name, databases) as service:
-            return await service.execute_sql(sql=base_query)
+            return await service.execute_sql(sql=base_query, params=(topK,))
     except Exception as e:
         logger.exception("show largest table failed.")
         logger.error(f"Error occurred: {str(e)}")
@@ -1728,8 +1738,8 @@ async def show_largest_table_fragment(
         databases = _get_db_instance_databases_str(client, region_id, dbinstance_id)
         # 构建SQL
         # 限制展示最大表数量的上限
-        topK = min(topK, 100)
-        base_query = f"""
+        topK = max(1, min(int(topK), 100))
+        base_query = """
                 SELECT 
                   ENGINE,
                   TABLE_SCHEMA,
@@ -1740,11 +1750,11 @@ async def show_largest_table_fragment(
                 FROM information_schema.TABLES
                 WHERE DATA_FREE > 0
                 ORDER BY DATA_FREE DESC
-                Limit {topK};
+                Limit %s;
             """
 
         async with DBService(region_id, dbinstance_id, db_name, databases) as service:
-            return await service.execute_sql(sql=base_query)
+            return await service.execute_sql(sql=base_query, params=(topK,))
     except Exception as e:
         logger.exception("show largest table failed.")
         logger.error(f"Error occurred: {str(e)}")
@@ -1793,13 +1803,13 @@ async def health_check(request: Request) -> JSONResponse:
 
 class VerifyHeaderMiddleware(BaseHTTPMiddleware):
     async def dispatch(self, request: Request, call_next):
-        api_key = os.getenv('API_KEY')
+        api_key = _get_api_key()
         if api_key:
             authorization = request.headers.get("authorization")
-            if not authorization:
+            request_key = _extract_bearer_token(authorization)
+            if not request_key:
                 return Response("Unauthorized", status_code=401)
-            request_key = authorization.split(" ")[-1]
-            if request_key != api_key:
+            if not hmac.compare_digest(request_key, api_key):
                 return Response("Unauthorized", status_code=401)
 
         token = current_request_headers.set(dict(request.headers))
@@ -1808,6 +1818,68 @@ class VerifyHeaderMiddleware(BaseHTTPMiddleware):
         finally:
             current_request_headers.reset(token)
         return response
+
+
+def _normalize_transport(transport: str) -> str:
+    return transport.replace("-", "_")
+
+
+def _get_server_host() -> str:
+    return os.getenv("SERVER_HOST", DEFAULT_SERVER_HOST).strip() or DEFAULT_SERVER_HOST
+
+
+def _get_api_key() -> str:
+    return os.getenv("API_KEY", "").strip()
+
+
+def _extract_bearer_token(authorization: str | None) -> str:
+    if not authorization:
+        return ""
+    parts = authorization.strip().split()
+    if len(parts) != 2 or parts[0].lower() != "bearer":
+        return ""
+    return parts[1]
+
+
+def _is_loopback_host(host: str) -> bool:
+    if host.lower() == "localhost":
+        return True
+    try:
+        return ipaddress.ip_address(host).is_loopback
+    except ValueError:
+        return False
+
+
+def _enforce_api_key_for_public_http_transport(transport: str, host: str) -> None:
+    if _normalize_transport(transport) not in ("sse", "streamable_http"):
+        return
+    if _is_loopback_host(host):
+        return
+    if _get_api_key():
+        return
+    raise ValueError(
+        "API_KEY is required when SERVER_TRANSPORT is sse or streamable_http "
+        "and SERVER_HOST is not a loopback address."
+    )
+
+
+def _env_enabled(name: str) -> bool:
+    return os.getenv(name, "").strip().lower() in TRUE_ENV_VALUES
+
+
+def _enforce_write_tools_for_public_http_transport(transport: str, host: str, enabled_groups: List[str]) -> None:
+    if _normalize_transport(transport) not in ("sse", "streamable_http"):
+        return
+    if _is_loopback_host(host):
+        return
+    if not WRITE_CAPABLE_TOOL_GROUPS.intersection(enabled_groups):
+        return
+    if _env_enabled("ENABLE_WRITE_TOOLS"):
+        return
+    raise ValueError(
+        "ENABLE_WRITE_TOOLS=true is required when exposing write-capable MCP tools "
+        "over sse or streamable_http on a non-loopback SERVER_HOST."
+    )
 
 
 def main(toolsets: Optional[str] = None) -> None:
@@ -1830,17 +1902,22 @@ def main(toolsets: Optional[str] = None) -> None:
     """
     source_string = toolsets or os.getenv("MCP_TOOLSETS")
 
+    transport = os.getenv("SERVER_TRANSPORT", "stdio")
+    normalized_transport = _normalize_transport(transport)
     enabled_groups = _parse_groups_from_source(source_string)
+    if normalized_transport in ("sse", "streamable_http"):
+        server_host = _get_server_host()
+        _enforce_api_key_for_public_http_transport(normalized_transport, server_host)
+        _enforce_write_tools_for_public_http_transport(normalized_transport, server_host, enabled_groups)
 
     mcp.activate(enabled_groups=enabled_groups)
 
-    transport = os.getenv("SERVER_TRANSPORT", "stdio")
-    if transport in ("sse", "streamable_http"):
-        app = mcp.sse_app() if transport == "sse" else mcp.streamable_http_app()
+    if normalized_transport in ("sse", "streamable_http"):
+        app = mcp.sse_app() if normalized_transport == "sse" else mcp.streamable_http_app()
         app.add_middleware(VerifyHeaderMiddleware)
         config = uvicorn.Config(
             app,
-            host="0.0.0.0",
+            host=server_host,
             port=8000,
             log_level="info",
         )

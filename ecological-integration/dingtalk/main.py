@@ -29,13 +29,10 @@ def define_options():
         default=os.getenv("DINGTALK_APP_CLIENT_ID"),
         help="app_key or suite_key from https://open-dev.digntalk.com",
     )
-    parser.add_argument(
-        "--client_secret",
-        dest="client_secret",
-        default=os.getenv("DINGTALK_APP_CLIENT_SECRET"),
-        help="app_secret or suite_secret from https://open-dev.digntalk.com",
-    )
     options = parser.parse_args()
+    options.client_secret = os.getenv("DINGTALK_APP_CLIENT_SECRET")
+    if not options.client_id or not options.client_secret:
+        parser.error("DINGTALK_APP_CLIENT_ID and DINGTALK_APP_CLIENT_SECRET must be set in environment variables.")
     return options
 
 

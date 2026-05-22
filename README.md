@@ -51,10 +51,13 @@ Set you env and run mcp server.
 ```shell
 # set env
 export SERVER_TRANSPORT=sse;
+export SERVER_HOST=127.0.0.1; # Default: 127.0.0.1. API_KEY is required when binding to a non-loopback host.
 export ALIBABA_CLOUD_ACCESS_KEY_ID=$you_access_id;
 export ALIBABA_CLOUD_ACCESS_KEY_SECRET=$you_access_key;
 export ALIBABA_CLOUD_SECURITY_TOKEN=$you_sts_security_token; # optional, required when using STS Token 
-export API_KEY=$you_mcp_server_api_key; # Optional, after configuration, requests will undergo API Key authentication.
+export API_KEY=$you_mcp_server_api_key; # Required when SERVER_HOST is not a loopback address.
+export ENABLE_WRITE_TOOLS=false; # Set true only when intentionally exposing write-capable tools on a non-loopback host.
+export ALLOW_HEADER_CREDENTIALS=false; # Default false. Set true only in trusted deployments that require per-request credentials.
 
 # run mcp server
 uvx alibabacloud-rds-openapi-mcp-server@latest
@@ -64,12 +67,13 @@ After run mcp server, you will see the following output:
 INFO:     Started server process [91594]
 INFO:     Waiting for application startup.
 INFO:     Application startup complete.
-INFO:     Uvicorn running on http://0.0.0.0:8000 (Press CTRL+C to quit)
+INFO:     Uvicorn running on http://127.0.0.1:8000 (Press CTRL+C to quit)
 ```
 And then configure the Cline.
 ```shell
 remote_server = "http://127.0.0.1:8000/sse";
 ```
+When `API_KEY` is configured, MCP clients must send `Authorization: Bearer <API_KEY>`.
 
 > If you encounter a `401 Incorrect API key provided` error when using Qwen, please refer to the [documentation](https://help.aliyun.com/zh/model-studio/cline) for solutions.
 
@@ -136,12 +140,12 @@ Add the following configuration to the MCP client configuration file:
 ### SQL Tools
 > The MCP Server will automatically create a read-only account, execute the SQL statement, and then automatically delete the account. This process requires that the MCP Server can connect to the instance.
 
-* `explain_sql`: Execute sql `explain` and return sql result.
+* `explain_sql`: Execute `EXPLAIN` for a single `SELECT` statement and return the execution plan.
 * `show_engine_innodb_status`: Execute sql `show engine innodb status` and return sql result.
-* `show_create_table`: Execute sql `show create table` and return sql result.
+* `show_create_table`: Execute `SHOW CREATE TABLE` for validated database and table identifiers.
 * `show_largest_table`: Query the top few tables with the highest space occupancy.
 * `show_largest_table_fragment`: Query the tables with the largest table fragments.
-* `query_sql`: Execute read-only sql and return sql result.
+* `query_sql`: Execute a single read-only SQL statement (`SELECT`, `SHOW`, `DESCRIBE`, or `EXPLAIN`) and return sql result.
 
 ### Toolsets
 
