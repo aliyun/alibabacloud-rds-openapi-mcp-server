@@ -1,6 +1,6 @@
 Metadata-Version: 2.4
 Name: alibabacloud-rds-openapi-mcp-server
-Version: 3.1.2
+Version: 4.0.1
 Summary: MCP server for RDS Services via OPENAPI.
 Author: AlibabaCloud RDS
 License-Expression: Apache-2.0
@@ -220,7 +220,10 @@ If no toolset is specified, the default `rds` group is loaded automatically.
 None at this time
 
 ### Skills
-This project supports extending the capabilities of RDS Copilot through Skills. Skills are predefined capability modules that enable AI assistants to perform more complex tasks.
+This project supports extending the capabilities of RDS Copilot through Skills. Two skills are available:
+
+- **alibabacloud-rds-copilot**: Invokes the RDS AI Assistant API for intelligent Q&A, SQL optimization, and troubleshooting.
+- **alibabacloud-rds-instances-manage**: Exposes this project's **OpenAPI tools** and **SQL tools** as a **script/CLI** for use with **OpenClaw**, **Claude Code**, and similar platforms. The model runs `alibabacloud-rds-instances-manage list` and `alibabacloud-rds-instances-manage run <tool_name> '<JSON args>'` to manage RDS instances (query instances, monitoring, slow logs, parameters, run read-only SQL, etc.). After installing the package, the `alibabacloud-rds-instances-manage` command is available; the skill directory is `skill/alibabacloud-rds-instances-manage/`.
 
 For detailed information on using Skills, please refer to: [Skills Documentation](./skill/skill_readme.md)
 
@@ -252,6 +255,18 @@ You are a professional Alibaba Cloud RDS Copilot, specializing in providing cust
 - **Professional Focus**: Discuss only Alibaba Cloud RDS-related technical topics.  
 - **Safety Awareness**: Ensure no operations negatively impact customer databases.
 ```
+
+## Security Deployment Guide
+
+Do not expose the MCP endpoint to the public Internet. The server can invoke Alibaba Cloud RDS OpenAPI tools and may use sensitive cloud credentials, so an Internet-facing MCP endpoint can create serious security risks.
+
+The strongly recommended deployment model is to run the MCP server only on the local loopback address:
+
+```shell
+export SERVER_HOST=127.0.0.1
+```
+
+If you must use a non-loopback address, restrict it to a trusted private network, enforce network access controls, configure `API_KEY`, and avoid enabling write-capable tools unless explicitly required.
 
 ## Contributing
 Contributions are welcome! Please feel free to submit a Pull Request.

@@ -3,9 +3,10 @@ README.md
 pyproject.toml
 src/__init__.py
 src/alibabacloud_rds_openapi_mcp_server/__init__.py
-src/alibabacloud_rds_openapi_mcp_server/cli.py
 src/alibabacloud_rds_openapi_mcp_server/db_service.py
+src/alibabacloud_rds_openapi_mcp_server/run_tool.py
 src/alibabacloud_rds_openapi_mcp_server/server.py
+src/alibabacloud_rds_openapi_mcp_server/sql_safety.py
 src/alibabacloud_rds_openapi_mcp_server/utils.py
 src/alibabacloud_rds_openapi_mcp_server.egg-info/PKG-INFO
 src/alibabacloud_rds_openapi_mcp_server.egg-info/SOURCES.txt
@@ -22,4 +23,8 @@ src/alibabacloud_rds_openapi_mcp_server/tools/__init__.py
 src/alibabacloud_rds_openapi_mcp_server/tools/aliyun_openapi_gateway.py
 src/alibabacloud_rds_openapi_mcp_server/tools/rds_custom_action.py
 src/alibabacloud_rds_openapi_mcp_server/tools/rds_custom_read.py
+test/test_credentials.py
+test/test_db_service.py
+test/test_http_auth.py
+test/test_sql_safety.py
 test/test_toolsets.py

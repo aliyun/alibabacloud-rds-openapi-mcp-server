@@ -1,3 +1,3 @@
 [console_scripts]
+alibabacloud-rds-instances-manage = alibabacloud_rds_openapi_mcp_server.run_tool:main
 alibabacloud-rds-openapi-mcp-server = alibabacloud_rds_openapi_mcp_server.server:main
-rds-cli = alibabacloud_rds_openapi_mcp_server.cli:main
