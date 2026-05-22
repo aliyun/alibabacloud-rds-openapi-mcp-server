@@ -8,6 +8,18 @@ MCP server for RDS Services via OPENAPI
 2. Install Python using `uv python install 3.12`
 3. Alibaba Cloud credentials with access to Alibaba Cloud RDS services
 
+## Security Deployment Guide
+
+Do not expose the MCP endpoint to the public Internet. The server can invoke Alibaba Cloud RDS OpenAPI tools and may use sensitive cloud credentials, so an Internet-facing MCP endpoint can create serious security risks.
+
+The strongly recommended deployment model is to run the MCP server only on the local loopback address:
+
+```shell
+export SERVER_HOST=127.0.0.1
+```
+
+If you must use a non-loopback address, restrict it to a trusted private network, enforce network access controls, configure `API_KEY`, and avoid enabling write-capable tools unless explicitly required.
+
 ## Quick Start
 ### Using [cherry-studio](https://github.com/CherryHQ/cherry-studio) (Recommended)
 1. Download and install cherry-studio

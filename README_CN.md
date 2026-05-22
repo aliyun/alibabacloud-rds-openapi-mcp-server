@@ -7,6 +7,18 @@ RDS OpenAPI MCP服务。
 2. 使用`uv python install 3.12`安装Python
 3. 具有阿里云RDS服务访问权限的账号凭证
 
+## 安全部署指南
+
+不应将 MCP 端点暴露于公网。该服务可以调用阿里云 RDS OpenAPI 工具，并且可能使用敏感的云账号凭证；如果 MCP 端点面向公网开放，会带来严重的安全风险。
+
+强烈建议仅将 MCP 服务监听在本地回环地址：
+
+```shell
+export SERVER_HOST=127.0.0.1
+```
+
+如果确实需要监听非本地回环地址，请仅限可信内网使用，配置严格的网络访问控制，启用 `API_KEY`，并避免在非必要情况下开放写操作工具。
+
 ## 快速开始
 ### 使用[cherry-studio](https://github.com/CherryHQ/cherry-studio)（推荐）
 1. [下载](https://docs.cherry-ai.com/cherry-studio/download)并安装cherry-studio
