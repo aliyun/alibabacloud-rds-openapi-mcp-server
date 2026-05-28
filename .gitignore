@@ -20,6 +20,7 @@ dist/
 .env
 .env.*
 !.env.example
+copilot_conversations.json
 
 # IDE and editor files
 .idea/

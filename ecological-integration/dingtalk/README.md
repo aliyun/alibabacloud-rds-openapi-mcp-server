@@ -65,6 +65,7 @@ pip install -r requirements.txt
 | `ACCESS_SECRET` | 阿里云 AccessKey Secret | 同上，创建时仅显示一次，请妥善保管 |
 | `DINGTALK_APP_CLIENT_ID` | 钉钉应用 Client ID | [钉钉开放平台](https://open.dingtalk.com/) → 进入应用 → **基础信息** → 凭证与基础信息 |
 | `DINGTALK_APP_CLIENT_SECRET` | 钉钉应用 Client Secret | 同上 |
+| `RDS_COPILOT_CONVERSATION_STORE_FILE` | 可选，本地 ConversationId 持久化 JSON 文件路径 | 未配置时默认写入当前运行目录下的 `copilot_conversations.json` |
 
 配置示例（Linux/macOS）：
 
@@ -99,6 +100,20 @@ python main.py
 
 1. 在钉钉 APP 顶部搜索框中输入该机器人名称，进入聊天界面。
 2. 直接输入问题并发送即可。
+
+### 多轮对话命令
+
+机器人默认开启多轮对话保持能力，会按“钉钉会话 + 消息发送人”将 RDS AI 助手返回的 `ConversationId` 写入本地 JSON 文件。服务重启后，同一会话中的同一发送人仍会沿用历史 `ConversationId`。
+
+可使用以下命令控制当前会话和发送人的多轮状态：
+
+| 命令 | 说明 |
+|------|------|
+| `/session on` | 开启多轮对话保持。 |
+| `/session off` | 关闭多轮对话保持，并清除已保存的 `ConversationId`。 |
+| `/new` | 清除当前 `ConversationId`，下一条普通消息会开启新的 RDS AI 助手会话。 |
+
+`/session on` 和 `/session off` 只有在消息内容完全匹配时才会被识别为命令，避免误拦截普通问题。
 
 ---
 
