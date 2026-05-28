@@ -3,3 +3,4 @@ dashscope
 loguru
 alibabacloud-tea-openapi
 alibabacloud-tea-util
+alibabacloud-dingtalk>=2.0.0

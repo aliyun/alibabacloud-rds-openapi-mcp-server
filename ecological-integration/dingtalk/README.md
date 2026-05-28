@@ -66,6 +66,8 @@ pip install -r requirements.txt
 | `DINGTALK_APP_CLIENT_ID` | 钉钉应用 Client ID | [钉钉开放平台](https://open.dingtalk.com/) → 进入应用 → **基础信息** → 凭证与基础信息 |
 | `DINGTALK_APP_CLIENT_SECRET` | 钉钉应用 Client Secret | 同上 |
 | `RDS_COPILOT_CONVERSATION_STORE_FILE` | 可选，本地 ConversationId 持久化 JSON 文件路径 | 未配置时默认写入当前运行目录下的 `copilot_conversations.json` |
+| `RDS_COPILOT_ENDPOINT` | 可选，RDS AI 助手 OpenAPI Endpoint | 未配置时默认使用线上 `rdsai.aliyuncs.com`，预发测试可配置为 `rdsai-pre.aliyuncs.com` |
+| `DINGTALK_ROBOT_CODE` | 可选，钉钉机器人 RobotCode | 未配置时默认使用 `DINGTALK_APP_CLIENT_ID`，用于给原消息添加/撤回 Thinking、Done 表情 |
 
 配置示例（Linux/macOS）：
 
@@ -114,6 +116,17 @@ python main.py
 | `/new` | 清除当前 `ConversationId`，下一条普通消息会开启新的 RDS AI 助手会话。 |
 
 `/session on` 和 `/session off` 只有在消息内容完全匹配时才会被识别为命令，避免误拦截普通问题。
+
+### 回复模式命令
+
+机器人默认使用 AI 卡片进行流式回复。也可以按“钉钉会话 + 消息发送人”切换为普通消息回复，配置同样会持久化到本地 JSON 文件。
+
+| 命令 | 说明 |
+|------|------|
+| `/card on` | 开启 AI 卡片回复。 |
+| `/card off` | 关闭 AI 卡片回复，改为通过 `sessionWebhook` 发送普通 Markdown 消息。 |
+
+`/card on` 和 `/card off` 只有在消息内容完全匹配时才会被识别为命令。普通消息模式下仍会调用 RDS AI 助手并保持多轮会话逻辑；如果 Copilot 调用异常或未返回正文，会向用户发送英文兜底错误提示。
 
 ---
 

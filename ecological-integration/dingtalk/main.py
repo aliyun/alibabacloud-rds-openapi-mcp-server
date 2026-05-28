@@ -4,14 +4,32 @@ import logging
 import asyncio
 import argparse
 import time
+import inspect
 from queue import Queue
 from concurrent.futures import ThreadPoolExecutor
+from urllib import error as urllib_error
+from urllib import request as urllib_request
 
 from loguru import logger
 from dingtalk_stream import AckMessage
 import dingtalk_stream
 
-from typing import Callable
+from typing import Any, Callable, Optional
+try:
+    from alibabacloud_dingtalk.robot_1_0 import (
+        client as dingtalk_robot_client,
+        models as dingtalk_robot_models,
+    )
+    from alibabacloud_tea_openapi import models as open_api_models
+    from alibabacloud_tea_util import models as tea_util_models
+
+    DINGTALK_ROBOT_SDK_AVAILABLE = True
+except ImportError:
+    dingtalk_robot_client = None
+    dingtalk_robot_models = None
+    open_api_models = None
+    tea_util_models = None
+    DINGTALK_ROBOT_SDK_AVAILABLE = False
 from rds_copilot import (
     RdsCopilot, 
     MessageEvent, 
@@ -74,6 +92,9 @@ CONVERSATION_STORE_FILE_ENV = "RDS_COPILOT_CONVERSATION_STORE_FILE"
 DEFAULT_CONVERSATION_STORE_FILE = "copilot_conversations.json"
 SESSION_ON_COMMAND = "/session on"
 SESSION_OFF_COMMAND = "/session off"
+CARD_ON_COMMAND = "/card on"
+CARD_OFF_COMMAND = "/card off"
+MAX_PLAIN_MESSAGE_LENGTH = 20000
 
 
 def parse_session_command(text: str) -> str:
@@ -82,6 +103,16 @@ def parse_session_command(text: str) -> str:
     if normalized_text == SESSION_ON_COMMAND:
         return "on"
     if normalized_text == SESSION_OFF_COMMAND:
+        return "off"
+    return ""
+
+
+def parse_card_command(text: str) -> str:
+    """Only match exact card commands so normal Copilot questions are not intercepted."""
+    normalized_text = (text or "").strip()
+    if normalized_text == CARD_ON_COMMAND:
+        return "on"
+    if normalized_text == CARD_OFF_COMMAND:
         return "off"
     return ""
 
@@ -160,6 +191,16 @@ class JsonCopilotConversationStore:
             return True
         return item.get("session_enabled") is True
 
+    def is_card_enabled(self, dingtalk_conversation_id: str, sender_id: str) -> bool:
+        key = self._key(dingtalk_conversation_id, sender_id)
+        if not key:
+            return True
+
+        item = self._load().get("conversations", {}).get(key)
+        if not isinstance(item, dict):
+            return True
+        return item.get("card_enabled") is not False
+
     def set_session_enabled(self, dingtalk_conversation_id: str, sender_id: str, enabled: bool):
         key = self._key(dingtalk_conversation_id, sender_id)
         if not key:
@@ -182,6 +223,28 @@ class JsonCopilotConversationStore:
         if not enabled:
             item["copilot_conversation_id"] = ""
 
+        conversations[key] = item
+        self._save(data)
+
+    def set_card_enabled(self, dingtalk_conversation_id: str, sender_id: str, enabled: bool):
+        key = self._key(dingtalk_conversation_id, sender_id)
+        if not key:
+            return
+
+        data = self._load()
+        conversations = data.setdefault("conversations", {})
+        item = conversations.get(key, {})
+        if not isinstance(item, dict):
+            item = {}
+
+        item.update(
+            {
+                "dingtalk_conversation_id": dingtalk_conversation_id,
+                "sender_id": sender_id,
+                "card_enabled": bool(enabled),
+                "updated_at": int(time.time()),
+            }
+        )
         conversations[key] = item
         self._save(data)
 
@@ -231,8 +294,260 @@ def get_copilot_conversation_store() -> JsonCopilotConversationStore:
     return JsonCopilotConversationStore(get_conversation_store_file_path())
 
 
+def extract_session_webhook(callback_data: Any, incoming_message: Any = None) -> str:
+    """Extract DingTalk sessionWebhook from the SDK message or raw callback payload."""
+    for attr_name in ("session_webhook", "sessionWebhook"):
+        value = getattr(incoming_message, attr_name, "") if incoming_message else ""
+        if isinstance(value, str) and value.strip():
+            return value.strip()
+
+    def walk(value: Any) -> str:
+        if isinstance(value, dict):
+            for key, child in value.items():
+                if key in ("sessionWebhook", "session_webhook") and isinstance(child, str):
+                    return child.strip()
+                result = walk(child)
+                if result:
+                    return result
+        elif isinstance(value, list):
+            for child in value:
+                result = walk(child)
+                if result:
+                    return result
+        return ""
+
+    return walk(callback_data)
+
+
+def _post_dingtalk_session_webhook(session_webhook: str, payload: dict):
+    data = json.dumps(payload, ensure_ascii=False).encode("utf-8")
+    request = urllib_request.Request(
+        session_webhook,
+        data=data,
+        headers={"Content-Type": "application/json; charset=utf-8"},
+        method="POST",
+    )
+    with urllib_request.urlopen(request, timeout=15) as response:
+        body = response.read(1024).decode("utf-8", errors="replace")
+        status_code = getattr(response, "status", response.getcode())
+    if status_code >= 300:
+        raise RuntimeError(f"DingTalk sessionWebhook HTTP {status_code}: {body[:200]}")
+    return body
+
+
+async def send_dingtalk_session_webhook(
+    session_webhook: str,
+    content: str,
+    *,
+    trace_id: str = "",
+):
+    """Send a normal DingTalk markdown message when card mode is disabled."""
+    if not session_webhook:
+        raise ValueError("sessionWebhook is empty")
+
+    message_text = (content or "").strip() or build_no_message_card_content()
+    if len(message_text) > MAX_PLAIN_MESSAGE_LENGTH:
+        message_text = message_text[:MAX_PLAIN_MESSAGE_LENGTH] + "\n\n...(truncated)"
+
+    payload = {
+        "msgtype": "markdown",
+        "markdown": {
+            "title": "RDS AI",
+            "text": message_text,
+        },
+    }
+    try:
+        await asyncio.to_thread(_post_dingtalk_session_webhook, session_webhook, payload)
+        logger.info(
+            f"[trace_id={trace_id}] plain message sent by sessionWebhook, "
+            f"content_length={len(message_text)}"
+        )
+        return True
+    except urllib_error.URLError as e:
+        logger.warning(f"[trace_id={trace_id}] sessionWebhook send failed: {e}")
+        raise
+
+
 # 线程池：在异步循环外执行同步阻塞的 RDS HTTP 请求，避免 [Errno 9] Bad file descriptor
 _chat_executor = ThreadPoolExecutor(max_workers=2, thread_name_prefix="rds_chat")
+_DINGTALK_ROBOT_CLIENT = None
+THINKING_EMOTION = "🤔Thinking"
+DONE_EMOTION = "🥳Done"
+
+
+def get_dingtalk_robot_client():
+    global _DINGTALK_ROBOT_CLIENT
+    if not DINGTALK_ROBOT_SDK_AVAILABLE:
+        return None
+    if _DINGTALK_ROBOT_CLIENT is None:
+        sdk_config = open_api_models.Config()
+        sdk_config.protocol = "https"
+        sdk_config.region_id = "central"
+        _DINGTALK_ROBOT_CLIENT = dingtalk_robot_client.Client(sdk_config)
+    return _DINGTALK_ROBOT_CLIENT
+
+
+async def get_dingtalk_access_token(self: dingtalk_stream.ChatbotHandler) -> str:
+    dingtalk_client = getattr(self, "dingtalk_client", None)
+    get_access_token = getattr(dingtalk_client, "get_access_token", None)
+    if not callable(get_access_token):
+        return ""
+
+    token = get_access_token()
+    if inspect.isawaitable(token):
+        token = await token
+    return token or ""
+
+
+async def send_dingtalk_emotion(
+    self: dingtalk_stream.ChatbotHandler,
+    incoming_message: dingtalk_stream.ChatbotMessage,
+    emoji_name: str,
+    *,
+    recall: bool = False,
+    trace_id: str = "",
+) -> bool:
+    """Add or recall a DingTalk reaction. Failures are logged and never block replies."""
+    trace = trace_id or getattr(incoming_message, "message_id", "") or "no-trace"
+    robot_sdk = get_dingtalk_robot_client()
+    if not robot_sdk:
+        logger.warning(f"[trace_id={trace}] DingTalk robot SDK unavailable, skip emotion")
+        return False
+
+    open_msg_id = getattr(incoming_message, "message_id", "") or ""
+    open_conversation_id = getattr(incoming_message, "conversation_id", "") or ""
+    if not open_msg_id or not open_conversation_id:
+        logger.warning(f"[trace_id={trace}] missing message_id or conversation_id, skip emotion")
+        return False
+
+    try:
+        token = await get_dingtalk_access_token(self)
+        if not token:
+            logger.warning(f"[trace_id={trace}] missing DingTalk access token, skip emotion")
+            return False
+
+        robot_code = (
+            getattr(incoming_message, "robot_code", "")
+            or getattr(incoming_message, "robotCode", "")
+            or os.getenv("DINGTALK_ROBOT_CODE")
+            or os.getenv("DINGTALK_APP_CLIENT_ID")
+            or ""
+        )
+        emotion_kwargs = {
+            "robot_code": robot_code,
+            "open_msg_id": open_msg_id,
+            "open_conversation_id": open_conversation_id,
+            "emotion_type": 2,
+            "emotion_name": emoji_name,
+        }
+        runtime = tea_util_models.RuntimeOptions()
+
+        if recall:
+            emotion_kwargs["text_emotion"] = (
+                dingtalk_robot_models.RobotRecallEmotionRequestTextEmotion(
+                    emotion_id="2659900",
+                    emotion_name=emoji_name,
+                    text=emoji_name,
+                    background_id="im_bg_1",
+                )
+            )
+            request = dingtalk_robot_models.RobotRecallEmotionRequest(**emotion_kwargs)
+            sdk_headers = dingtalk_robot_models.RobotRecallEmotionHeaders(
+                x_acs_dingtalk_access_token=token,
+            )
+            await robot_sdk.robot_recall_emotion_with_options_async(request, sdk_headers, runtime)
+        else:
+            emotion_kwargs["text_emotion"] = (
+                dingtalk_robot_models.RobotReplyEmotionRequestTextEmotion(
+                    emotion_id="2659900",
+                    emotion_name=emoji_name,
+                    text=emoji_name,
+                    background_id="im_bg_1",
+                )
+            )
+            request = dingtalk_robot_models.RobotReplyEmotionRequest(**emotion_kwargs)
+            sdk_headers = dingtalk_robot_models.RobotReplyEmotionHeaders(
+                x_acs_dingtalk_access_token=token,
+            )
+            await robot_sdk.robot_reply_emotion_with_options_async(request, sdk_headers, runtime)
+
+        action = "recall" if recall else "reply"
+        logger.info(
+            f"[trace_id={trace}] DingTalk emotion {action} success, "
+            f"emoji={emoji_name}, message_id={open_msg_id}"
+        )
+        return True
+    except Exception as e:
+        action = "recall" if recall else "reply"
+        logger.warning(
+            f"[trace_id={trace}] DingTalk emotion {action} failed, "
+            f"emoji={emoji_name}, error={e}"
+        )
+        return False
+
+
+class DingTalkEmotionSwitcher:
+    """Keep one reaction state per reply: start with Thinking, then recall it and add Done."""
+
+    def __init__(self, handler: dingtalk_stream.ChatbotHandler, incoming_message: dingtalk_stream.ChatbotMessage):
+        self.handler = handler
+        self.incoming_message = incoming_message
+        self.current_emoji = ""
+        self.trace_id = incoming_message.message_id or f"trace-{int(time.time() * 1000)}"
+
+    async def set_state(self, emoji_name: str):
+        if not emoji_name or emoji_name == self.current_emoji:
+            return
+
+        previous_emoji = self.current_emoji
+        if previous_emoji:
+            await send_dingtalk_emotion(
+                self.handler,
+                self.incoming_message,
+                previous_emoji,
+                recall=True,
+                trace_id=self.trace_id,
+            )
+
+        await send_dingtalk_emotion(
+            self.handler,
+            self.incoming_message,
+            emoji_name,
+            trace_id=self.trace_id,
+        )
+        self.current_emoji = emoji_name
+
+    async def finish(self):
+        if self.current_emoji:
+            await send_dingtalk_emotion(
+                self.handler,
+                self.incoming_message,
+                self.current_emoji,
+                recall=True,
+                trace_id=self.trace_id,
+            )
+            self.current_emoji = ""
+
+        await send_dingtalk_emotion(
+            self.handler,
+            self.incoming_message,
+            DONE_EMOTION,
+            trace_id=self.trace_id,
+        )
+
+
+async def handle_reply_with_emotions(
+    self: dingtalk_stream.ChatbotHandler,
+    incoming_message: dingtalk_stream.ChatbotMessage,
+    reply_coro,
+    emotion_switcher: Optional[DingTalkEmotionSwitcher] = None,
+):
+    switcher = emotion_switcher or DingTalkEmotionSwitcher(self, incoming_message)
+    await switcher.set_state(THINKING_EMOTION)
+    try:
+        return await reply_coro
+    finally:
+        await switcher.finish()
 
 
 async def call_with_stream(
@@ -323,6 +638,66 @@ async def call_with_stream(
         f"Request: {request_content[:80]}... | content 长度: {len(full_content)} | preparations: {len(preparations)} | conversion_id: {final_conversion_id}"
     )
     return {"content": full_content, "preparations": preparations, "conversion_id": final_conversion_id}
+
+
+async def handle_reply_plain_message(
+    self: dingtalk_stream.ChatbotHandler,
+    incoming_message: dingtalk_stream.ChatbotMessage,
+    callback_data: Any,
+    conversion_id: str = "",
+    session_enabled: bool = False,
+):
+    """Consume the Copilot stream without creating a card, then send the final text as a normal message."""
+    trace_id = incoming_message.message_id or f"trace-{int(time.time() * 1000)}"
+    final_contents = {"content": "", "conversion_id": ""}
+    final_display_content = ""
+
+    async def update_plain_callback(update_data: dict):
+        return None
+
+    try:
+        rds_copilot = RdsCopilot()
+        final_contents = await call_with_stream(
+            incoming_message.text.content,
+            update_plain_callback,
+            rds_copilot,
+            conversion_id,
+        )
+
+        current_conversion_id = final_contents.get("conversion_id", "")
+        if current_conversion_id and session_enabled:
+            get_copilot_conversation_store().set(
+                incoming_message.conversation_id,
+                incoming_message.sender_id,
+                current_conversion_id,
+            )
+
+        final_display_content = final_contents.get("content", "")
+        if not final_display_content:
+            final_display_content = build_no_message_card_content()
+            self.logger.warning(
+                f"[trace_id={trace_id}] no message returned from RDS AI in plain mode"
+            )
+    except Exception as e:
+        final_display_content = build_error_card_content(e)
+        self.logger.exception(f"[trace_id={trace_id}] handle plain reply failed: {e}")
+
+    session_webhook = extract_session_webhook(callback_data, incoming_message)
+    try:
+        if session_webhook:
+            await send_dingtalk_session_webhook(
+                session_webhook,
+                final_display_content,
+                trace_id=trace_id,
+            )
+        else:
+            self.logger.warning(f"[trace_id={trace_id}] sessionWebhook missing, fallback to reply_text")
+            self.reply_text(final_display_content, incoming_message)
+    except Exception as e:
+        self.logger.exception(f"[trace_id={trace_id}] send plain reply failed: {e}")
+        self.reply_text(final_display_content, incoming_message)
+
+    return final_contents
 
 
 async def handle_reply_and_update_card(self: dingtalk_stream.ChatbotHandler, incoming_message: dingtalk_stream.ChatbotMessage, conversion_id: str = ''):
@@ -438,6 +813,7 @@ class CardBotHandler(dingtalk_stream.ChatbotHandler):
         sender_id = incoming_message.sender_id
         query_text = incoming_message.text.content.strip()
         session_command = parse_session_command(query_text)
+        card_command = parse_card_command(query_text)
 
         if session_command:
             session_enabled = session_command == "on"
@@ -456,6 +832,24 @@ class CardBotHandler(dingtalk_stream.ChatbotHandler):
             else:
                 self.reply_text("Conversation context is disabled.", incoming_message)
             return AckMessage.STATUS_OK, "OK"
+
+        if card_command:
+            card_enabled = card_command == "on"
+            store.set_card_enabled(
+                dingtalk_conversation_id,
+                sender_id,
+                card_enabled,
+            )
+            self.logger.info(
+                f"DingTalk card reply setting changed, "
+                f"card_enabled={card_enabled}, "
+                f"dingtalk_conversation_id={dingtalk_conversation_id}, sender_id={sender_id}"
+            )
+            if card_enabled:
+                self.reply_text("Card replies are enabled.", incoming_message)
+            else:
+                self.reply_text("Card replies are disabled.", incoming_message)
+            return AckMessage.STATUS_OK, "OK"
         
         # 检测 /new 命令，重置对话
         if is_new_conversation_command(query_text):
@@ -468,6 +862,7 @@ class CardBotHandler(dingtalk_stream.ChatbotHandler):
             return AckMessage.STATUS_OK, "OK"
 
         session_enabled = store.is_session_enabled(dingtalk_conversation_id, sender_id)
+        card_enabled = store.is_card_enabled(dingtalk_conversation_id, sender_id)
         # 默认保持多轮上下文；用户可以通过 /session off 为当前会话和发送人关闭。
         conversion_id = store.get(dingtalk_conversation_id, sender_id) if session_enabled else ""
         
@@ -484,7 +879,31 @@ class CardBotHandler(dingtalk_stream.ChatbotHandler):
             ):
                 store.set(dingtalk_conversation_id, sender_id, final_conversion_id)
 
-        asyncio.create_task(handle_and_update_conversation())
+        emotion_switcher = DingTalkEmotionSwitcher(self, incoming_message)
+        if card_enabled:
+            asyncio.create_task(
+                handle_reply_with_emotions(
+                    self,
+                    incoming_message,
+                    handle_and_update_conversation(),
+                    emotion_switcher=emotion_switcher,
+                )
+            )
+        else:
+            asyncio.create_task(
+                handle_reply_with_emotions(
+                    self,
+                    incoming_message,
+                    handle_reply_plain_message(
+                        self,
+                        incoming_message,
+                        callback.data,
+                        conversion_id=conversion_id,
+                        session_enabled=session_enabled,
+                    ),
+                    emotion_switcher=emotion_switcher,
+                )
+            )
         return AckMessage.STATUS_OK, "OK"
 
 
