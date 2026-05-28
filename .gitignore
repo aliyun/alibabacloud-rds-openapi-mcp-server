@@ -21,6 +21,7 @@ dist/
 .env.*
 !.env.example
 copilot_conversations.json
+ecological-integration/dingtalk/HANDOFF_SECRETS.md
 
 # IDE and editor files
 .idea/
