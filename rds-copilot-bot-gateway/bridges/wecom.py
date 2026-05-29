@@ -21,6 +21,7 @@ from core.bot_core import (
     run_still_working_notifier,
     should_accept_session_source,
 )
+from core.error_detail import payload_detail
 from core.rds_copilot import RdsCopilot
 
 try:
@@ -251,9 +252,10 @@ class WeComBridge:
         errcode = auth_payload.get("errcode", 0)
         if errcode not in (0, None):
             errmsg = auth_payload.get("errmsg") or "authentication failed"
+            detail = payload_detail(auth_payload)
             raise RuntimeError(
                 "企业微信 WeCom 鉴权失败：请检查 WECOM_BOT_ID 和 WECOM_SECRET。"
-                f"网关返回：{errmsg} (errcode={errcode})"
+                f"网关返回：{errmsg} (errcode={errcode})。完整响应：{detail}"
             )
 
     async def _heartbeat_loop(self):
@@ -359,7 +361,8 @@ class WeComBridge:
         context = BotContext(source.platform, source.chat_id, source.user_id, self.store)
         control_result = await handle_control_command(query_text, context, self.copilot_factory, card_supported=False)
         if control_result.handled:
-            await self.send_text(source.chat_id, control_result.content, reply_req_id=reply_req_id)
+            for index, content in enumerate(control_result.response_contents()):
+                await self.send_text(source.chat_id, content, reply_req_id=reply_req_id if index == 0 else "")
             return
 
         language = self.store.get_language(source.chat_id, source.user_id, platform=WECOM_PLATFORM)

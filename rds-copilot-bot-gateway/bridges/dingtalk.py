@@ -51,6 +51,7 @@ from core.bot_core import (
     run_still_working_notifier,
     should_accept_session_source,
 )
+from core.error_detail import compact_text, exception_detail, payload_detail
 
 
 def define_options():
@@ -642,7 +643,8 @@ class CardBotHandler(dingtalk_stream.ChatbotHandler):
 
         control_result = await handle_control_command(query_text, context, card_supported=True)
         if control_result.handled:
-            self.reply_command_content(control_result.content, incoming_message)
+            for content in control_result.response_contents():
+                self.reply_command_content(content, incoming_message)
             return AckMessage.STATUS_OK, "OK"
 
         active_state = context.registry.try_start(context)
@@ -760,9 +762,58 @@ def build_dingtalk_stream_client(options):
 def validate_dingtalk_startup():
     options = define_options()
     client = build_dingtalk_stream_client(options)
-    connection = client.open_connection()
-    if not connection:
+    topics = []
+    if getattr(client, "_is_event_required", False):
+        topics.append({"type": "EVENT", "topic": "*"})
+    for topic in (getattr(client, "callback_handler_map", {}) or {}).keys():
+        topics.append({"type": "CALLBACK", "topic": topic})
+
+    request_body = json.dumps(
+        {
+            "clientId": options.client_id,
+            "clientSecret": options.client_secret,
+            "subscriptions": topics,
+            "ua": f"dingtalk-sdk-python/v{getattr(dingtalk_stream, 'VERSION_STRING', 'unknown')}-union",
+            "localIp": client.get_host_ip(),
+        }
+    ).encode("utf-8")
+    request = urllib_request.Request(
+        dingtalk_stream.DingTalkStreamClient.OPEN_CONNECTION_API,
+        data=request_body,
+        headers={
+            "Content-Type": "application/json",
+            "Accept": "application/json",
+            "User-Agent": "DingTalkStream startup-check",
+        },
+        method="POST",
+    )
+    try:
+        with urllib_request.urlopen(request, timeout=10) as response:
+            response_text = response.read().decode("utf-8", errors="replace")
+    except Exception as e:
         raise RuntimeError(
             "钉钉 Stream 鉴权失败：请检查 DINGTALK_APP_CLIENT_ID、"
             "DINGTALK_APP_CLIENT_SECRET 和机器人 Stream 模式权限。"
+            f"原始错误：{exception_detail(e)}"
+        ) from e
+
+    try:
+        payload = json.loads(response_text or "{}")
+    except json.JSONDecodeError as e:
+        raise RuntimeError(
+            "钉钉 Stream 鉴权失败：平台返回不是有效 JSON。"
+            f"原始响应：{compact_text(response_text)}"
+        ) from e
+    if not isinstance(payload, dict):
+        raise RuntimeError(
+            "钉钉 Stream 鉴权失败：平台返回格式异常。"
+            f"原始响应：{payload_detail(payload)}"
+        )
+    code = payload.get("code", payload.get("errcode"))
+    if code not in (None, 0, "0"):
+        message = payload.get("message") or payload.get("msg") or payload.get("errmsg") or "unknown error"
+        raise RuntimeError(
+            "钉钉 Stream 鉴权失败：请检查 DINGTALK_APP_CLIENT_ID、"
+            "DINGTALK_APP_CLIENT_SECRET 和机器人 Stream 模式权限。"
+            f"平台返回：{message} (code={code})。完整响应：{payload_detail(payload)}"
         )

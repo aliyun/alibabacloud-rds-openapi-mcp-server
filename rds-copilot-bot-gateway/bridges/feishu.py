@@ -24,6 +24,7 @@ from core.bot_core import (
     run_still_working_notifier,
     should_accept_session_source,
 )
+from core.error_detail import exception_detail
 from core.rds_copilot import RdsCopilot
 
 try:
@@ -97,8 +98,10 @@ def validate_feishu_startup(app_id: str = "", app_secret: str = "", domain: str 
         with urllib_request.urlopen(request, timeout=10) as response:
             payload = json.loads(response.read().decode("utf-8") or "{}")
     except Exception as e:
+        detail = exception_detail(e)
         raise RuntimeError(
             "飞书鉴权失败：请检查 FEISHU_APP_ID、FEISHU_APP_SECRET、FEISHU_DOMAIN 和机器人权限。"
+            f"原始错误：{detail}"
         ) from e
 
     code = int(payload.get("code", -1))
@@ -326,7 +329,8 @@ class FeishuBridge:
             card_supported=False,
         )
         if control_result.handled:
-            await self.send_text(chat_id, control_result.content, reply_to_message_id=message_id)
+            for content in control_result.response_contents():
+                await self.send_text(chat_id, content, reply_to_message_id=message_id)
             return
 
         language = self.store.get_language(chat_id, sender_id, platform=FEISHU_PLATFORM)

@@ -217,12 +217,12 @@ def should_accept_session_source(source: SessionSource, text: str = "", *, menti
 
 def parse_session_command(text: str) -> str:
     normalized_text = (text or "").strip()
+    if normalized_text == "/session":
+        return "status"
     if normalized_text == "/session on":
         return "on"
     if normalized_text == "/session off":
         return "off"
-    if normalized_text == "/session status":
-        return "status"
     if normalized_text == "/session ls":
         return "ls"
     parts = normalized_text.split(maxsplit=1)
@@ -257,14 +257,15 @@ I18N_MESSAGES = {
             ("/help", "查看短命令帮助。"),
             ("/btw", "查看当前正在运行任务已经收到的回复内容。"),
             ("/stop", "停止当前正在运行的 RDS AI 任务。"),
-            ("/card on|off|status", "管理钉钉 AI 卡片回复。"),
-            ("/session on|off|status|ls|<id>", "管理多轮对话上下文。"),
+            ("/card|on|off", "查看或管理钉钉 AI 卡片回复。"),
+            ("/session|on|off|ls|<id>", "查看或管理多轮对话上下文。"),
             ("/new", "开启新对话。"),
-            ("/agent ls|<agent-name>|default", "管理 Custom Agent。"),
+            ("/agent|ls|<agent-name>|default", "查看或管理 Custom Agent。"),
             ("/language [zh-CN|zh-TW|en-US|ja-JP]", "查看或切换短命令语言。"),
             ("/tz [IANA timezone]", "查看或切换当前时区。"),
             ("/skills [page]", "查看 Skill 列表。"),
         ],
+        "invalid_command_argument": "短命令参数不正确：`{command}`。请参考下面的帮助。",
         "no_active_task": "当前没有正在运行的任务。",
         "no_active_task_stop": "当前没有可停止的任务。",
         "no_displayable_content": "还没有收到可展示的回复内容。",
@@ -301,6 +302,8 @@ I18N_MESSAGES = {
         "agent_not_found": "没有找到这个 Agent。请先运行 `/agent ls`。",
         "agent_cleared": "已清除 Custom Agent，恢复默认 RDS Copilot。",
         "agent_selected": "已选择 Custom Agent：`{name}`",
+        "agent_status_default": "当前 Custom Agent：默认 RDS Copilot。",
+        "agent_status_selected": "当前 Custom Agent：`{name}`\nAgentId：`{agent_id}`",
         "no_conversations": "没有找到最近对话。",
         "conversations_title": "最近对话：",
         "conversation_untitled": "未命名对话",
@@ -320,14 +323,15 @@ I18N_MESSAGES = {
             ("/help", "查看短命令說明。"),
             ("/btw", "查看目前執行中任務已收到的回覆內容。"),
             ("/stop", "停止目前執行中的 RDS AI 任務。"),
-            ("/card on|off|status", "管理釘釘 AI 卡片回覆。"),
-            ("/session on|off|status|ls|<id>", "管理多輪對話上下文。"),
+            ("/card|on|off", "查看或管理釘釘 AI 卡片回覆。"),
+            ("/session|on|off|ls|<id>", "查看或管理多輪對話上下文。"),
             ("/new", "開啟新對話。"),
-            ("/agent ls|<agent-name>|default", "管理 Custom Agent。"),
+            ("/agent|ls|<agent-name>|default", "查看或管理 Custom Agent。"),
             ("/language [zh-CN|zh-TW|en-US|ja-JP]", "查看或切換短命令語言。"),
             ("/tz [IANA timezone]", "查看或切換目前時區。"),
             ("/skills [page]", "查看 Skill 列表。"),
         ],
+        "invalid_command_argument": "短命令參數不正確：`{command}`。請參考下面的說明。",
         "no_active_task": "目前沒有正在執行的任務。",
         "no_active_task_stop": "目前沒有可停止的任務。",
         "no_displayable_content": "尚未收到可顯示的回覆內容。",
@@ -364,6 +368,8 @@ I18N_MESSAGES = {
         "agent_not_found": "沒有找到這個 Agent。請先執行 `/agent ls`。",
         "agent_cleared": "已清除 Custom Agent，恢復預設 RDS Copilot。",
         "agent_selected": "已選擇 Custom Agent：`{name}`",
+        "agent_status_default": "目前 Custom Agent：預設 RDS Copilot。",
+        "agent_status_selected": "目前 Custom Agent：`{name}`\nAgentId：`{agent_id}`",
         "no_conversations": "沒有找到最近對話。",
         "conversations_title": "最近對話：",
         "conversation_untitled": "未命名對話",
@@ -383,14 +389,15 @@ I18N_MESSAGES = {
             ("/help", "Show command help."),
             ("/btw", "Show the answer received by the current running task."),
             ("/stop", "Stop the current RDS AI task."),
-            ("/card on|off|status", "Manage DingTalk AI card replies."),
-            ("/session on|off|status|ls|<id>", "Manage conversation context."),
+            ("/card|on|off", "View or manage DingTalk AI card replies."),
+            ("/session|on|off|ls|<id>", "View or manage conversation context."),
             ("/new", "Start a new conversation."),
-            ("/agent ls|<agent-name>|default", "Manage Custom Agent selection."),
+            ("/agent|ls|<agent-name>|default", "View or manage Custom Agent selection."),
             ("/language [zh-CN|zh-TW|en-US|ja-JP]", "View or switch command language."),
             ("/tz [IANA timezone]", "View or switch timezone."),
             ("/skills [page]", "List Skills."),
         ],
+        "invalid_command_argument": "Invalid command argument: `{command}`. See the command help below.",
         "no_active_task": "No active task.",
         "no_active_task_stop": "No active task to stop.",
         "no_displayable_content": "No displayable content has been received yet.",
@@ -427,6 +434,8 @@ I18N_MESSAGES = {
         "agent_not_found": "Agent not found. Run `/agent ls` first.",
         "agent_cleared": "Custom agent cleared. Using default RDS Copilot.",
         "agent_selected": "Custom agent selected: `{name}`",
+        "agent_status_default": "Current Custom Agent: default RDS Copilot.",
+        "agent_status_selected": "Current Custom Agent: `{name}`\nAgentId: `{agent_id}`",
         "no_conversations": "No recent conversations found.",
         "conversations_title": "Recent conversations:",
         "conversation_untitled": "Untitled",
@@ -446,14 +455,15 @@ I18N_MESSAGES = {
             ("/help", "短縮コマンドのヘルプを表示します。"),
             ("/btw", "実行中タスクで受信済みの回答を表示します。"),
             ("/stop", "実行中の RDS AI タスクを停止します。"),
-            ("/card on|off|status", "DingTalk AI カード返信を管理します。"),
-            ("/session on|off|status|ls|<id>", "会話コンテキストを管理します。"),
+            ("/card|on|off", "DingTalk AI カード返信を表示または管理します。"),
+            ("/session|on|off|ls|<id>", "会話コンテキストを表示または管理します。"),
             ("/new", "新しい会話を開始します。"),
-            ("/agent ls|<agent-name>|default", "Custom Agent を管理します。"),
+            ("/agent|ls|<agent-name>|default", "Custom Agent を表示または管理します。"),
             ("/language [zh-CN|zh-TW|en-US|ja-JP]", "コマンド言語を表示または切り替えます。"),
             ("/tz [IANA timezone]", "現在のタイムゾーンを表示または切り替えます。"),
             ("/skills [page]", "Skill 一覧を表示します。"),
         ],
+        "invalid_command_argument": "コマンド引数が正しくありません: `{command}`。以下のヘルプを参照してください。",
         "no_active_task": "実行中のタスクはありません。",
         "no_active_task_stop": "停止できる実行中タスクはありません。",
         "no_displayable_content": "表示できる回答はまだ受信していません。",
@@ -490,6 +500,8 @@ I18N_MESSAGES = {
         "agent_not_found": "Agent が見つかりません。先に `/agent ls` を実行してください。",
         "agent_cleared": "Custom Agent をクリアし、デフォルトの RDS Copilot を使用します。",
         "agent_selected": "Custom Agent を選択しました: `{name}`",
+        "agent_status_default": "現在の Custom Agent: デフォルトの RDS Copilot。",
+        "agent_status_selected": "現在の Custom Agent: `{name}`\nAgentId: `{agent_id}`",
         "no_conversations": "最近の会話は見つかりません。",
         "conversations_title": "最近の会話:",
         "conversation_untitled": "無題の会話",
@@ -603,12 +615,12 @@ def format_unsupported_timezone(timezone: str, language: str = DEFAULT_LANGUAGE)
 
 def parse_card_command(text: str) -> str:
     normalized_text = (text or "").strip()
+    if normalized_text == "/card":
+        return "status"
     if normalized_text == "/card on":
         return "on"
     if normalized_text == "/card off":
         return "off"
-    if normalized_text == "/card status":
-        return "status"
     return ""
 
 
@@ -1064,6 +1076,12 @@ class BotContext:
 class ControlCommandResult:
     handled: bool
     content: str = ""
+    contents: list[str] | None = None
+
+    def response_contents(self) -> list[str]:
+        if self.contents is not None:
+            return [content for content in self.contents if content]
+        return [self.content] if self.content else []
 
 
 def _short_id(value: str) -> str:
@@ -1139,6 +1157,14 @@ def format_agents(agents: list[dict], language: str = DEFAULT_LANGUAGE) -> str:
     return "\n".join(lines)
 
 
+def format_agent_status(agent: dict, language: str = DEFAULT_LANGUAGE) -> str:
+    if not agent:
+        return str(_t(language, "agent_status_default"))
+    agent_id = str(agent.get("id") or agent.get("Id") or "").strip()
+    name = str(agent.get("name") or agent.get("Name") or "").strip() or str(_t(language, "agent_unnamed"))
+    return str(_t(language, "agent_status_selected", name=name, agent_id=_short_id(agent_id)))
+
+
 def format_skills(
     skills: list[dict],
     page_number: int = 1,
@@ -1193,6 +1219,15 @@ def format_help(language: str = DEFAULT_LANGUAGE) -> str:
     for command, description in _t(language, "help_items"):
         lines.append(f"- `{command}` - {description}")
     return "\n".join(lines)
+
+
+def format_invalid_command(command: str, language: str = DEFAULT_LANGUAGE) -> str:
+    return "\n\n".join(
+        [
+            str(_t(language, "invalid_command_argument", command=command)),
+            format_help(language),
+        ]
+    )
 
 
 def format_still_working_message(
@@ -1269,6 +1304,11 @@ def _parse_skills_args(text: str) -> tuple[int, bool]:
     return 1, False
 
 
+def _is_single_argument_command(text: str, command: str) -> bool:
+    parts = (text or "").strip().split(maxsplit=2)
+    return len(parts) == 2 and parts[0] == command and bool(parts[1].strip())
+
+
 async def handle_control_command(
     text: str,
     context: BotContext,
@@ -1300,11 +1340,14 @@ async def handle_control_command(
         state = context.registry.get(context)
         if not state:
             return ControlCommandResult(True, str(_t(language, "no_active_task_stop")))
+        partial_content = state.snapshot()["message_buffer"].strip()
         state.request_cancel()
         should_stop, task_id = state.should_send_stop()
         if should_stop:
             _get_copilot(rds_copilot).stop_task(task_id)
-        return ControlCommandResult(True, str(_t(language, "stopped_task")))
+        stopped_content = str(_t(language, "stopped_task"))
+        response_contents = [partial_content, stopped_content] if partial_content else [stopped_content]
+        return ControlCommandResult(True, stopped_content, response_contents)
 
     if normalized == "/language":
         return ControlCommandResult(True, format_language_options(language, language))
@@ -1322,7 +1365,9 @@ async def handle_control_command(
                         f"- {_t(language, 'unsupported_language', language=requested_language)}",
                         f"- {_t(language, 'language_available', values=_code_join(SUPPORTED_LANGUAGE_VALUES))}",
                     ]
-                ),
+                )
+                + "\n\n"
+                + format_help(language),
             )
         store.set_language(chat_id, sender_id, normalized_language, platform=platform)
         return ControlCommandResult(True, f"**{_t(normalized_language, 'language_switched', language=normalized_language)}**")
@@ -1333,7 +1378,7 @@ async def handle_control_command(
     if normalized.startswith("/tz "):
         timezone = normalized.split(maxsplit=1)[1].strip()
         if not _is_valid_timezone(timezone):
-            return ControlCommandResult(True, format_unsupported_timezone(timezone, language))
+            return ControlCommandResult(True, format_unsupported_timezone(timezone, language) + "\n\n" + format_help(language))
         store.set_timezone(chat_id, sender_id, timezone, platform=platform)
         return ControlCommandResult(True, f"**{_t(language, 'timezone_switched', timezone=timezone)}**")
 
@@ -1350,6 +1395,8 @@ async def handle_control_command(
             True,
             str(_t(language, "card_enabled" if enabled else "card_disabled")),
         )
+    if _is_single_argument_command(normalized, "/card"):
+        return ControlCommandResult(True, format_invalid_command(normalized, language))
 
     session_command = parse_session_command(normalized)
     if session_command:
@@ -1386,6 +1433,8 @@ async def handle_control_command(
             store.set_conversation_id(chat_id, sender_id, conversation_id, platform=platform)
             store.set_session_enabled(chat_id, sender_id, True, platform=platform)
             return ControlCommandResult(True, str(_t(language, "checked_out", conversation_id=conversation_id)))
+    if _is_single_argument_command(normalized, "/session"):
+        return ControlCommandResult(True, format_invalid_command(normalized, language))
 
     if is_new_conversation_command(normalized):
         store.clear_conversation_id(chat_id, sender_id, platform=platform)
@@ -1396,6 +1445,9 @@ async def handle_control_command(
         agents = data.get("Data") or []
         context.cache.set_agents(platform, chat_id, sender_id, agents)
         return ControlCommandResult(True, format_agents(agents, language))
+
+    if normalized == "/agent":
+        return ControlCommandResult(True, format_agent_status(store.get_agent(chat_id, sender_id, platform=platform), language))
 
     if normalized == "/agent default":
         store.clear_agent(chat_id, sender_id, platform=platform)
@@ -1414,7 +1466,7 @@ async def handle_control_command(
     if normalized == "/skills" or normalized.startswith("/skills "):
         page_number, valid_skills_command = _parse_skills_args(normalized)
         if not valid_skills_command:
-            return ControlCommandResult(False, "")
+            return ControlCommandResult(True, format_invalid_command(normalized, language))
         data = _get_copilot(rds_copilot).list_skills(
             page_number=page_number,
             page_size=20,

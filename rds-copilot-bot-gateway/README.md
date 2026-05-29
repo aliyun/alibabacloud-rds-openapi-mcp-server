@@ -40,16 +40,12 @@ RDS_BOT_BRIDGES=all python main.py
 | `RDS_BRIDGE_RESTART_BASE_SECONDS` | 否 | bridge 异常退出后的重启退避起始时间，默认 `3` 秒。 |
 | `RDS_BRIDGE_RESTART_MAX_SECONDS` | 否 | bridge 异常退出后的最大重启退避时间，默认 `60` 秒。 |
 
-**安全控制默认拒绝未授权用户**。生产环境建议配置对应平台的 `*_ALLOWED_USERS`；本地验证或内网可信环境可临时使用 `*_ALLOW_ALL_USERS=true` 或 `GATEWAY_ALLOW_ALL_USERS=true`。
+**安全控制默认拒绝未授权用户**。可以配置对应平台的 `*_ALLOWED_USERS` 做访问控制；如果希望机器人对所有用户开放，可设置 `*_ALLOW_ALL_USERS=true` 或 `GATEWAY_ALLOW_ALL_USERS=true`。
 
 | 变量名 | 必选 | 说明 |
 |---|---|---|
 | `GATEWAY_ALLOWED_USERS` | 否 | 全局允许访问的用户 ID，多个用逗号分隔。 |
-| `GATEWAY_ALLOW_ALL_USERS` | 否 | 设为 `true` 时允许所有平台用户，仅建议本地或内网可信环境使用。 |
-
-## 启动排查
-
-启动时会先检查当前选择的平台是否缺少必填环境变量；缺少时会直接打印缺失项并退出，不会带 Python 堆栈。随后会对已选择平台做启动鉴权检查，只要任意平台的机器人 ID、Secret 或启动权限有问题，本次启动就会立即退出并打印失败平台。服务成功启动后，如果长连接再断开，会继续按重连策略打印错误日志并自动重试。
+| `GATEWAY_ALLOW_ALL_USERS` | 否 | 设为 `true` 时允许所有平台用户访问。 |
 
 ## 钉钉
 
@@ -64,7 +60,7 @@ ACCESS_SECRET=your-alibaba-cloud-access-key-secret
 DINGTALK_APP_CLIENT_ID=your-dingtalk-client-id
 DINGTALK_APP_CLIENT_SECRET=your-dingtalk-client-secret
 DINGTALK_ALLOWED_USERS=sender-id-1,sender-staff-id-2
-# 本地验证可临时改用：DINGTALK_ALLOW_ALL_USERS=true
+# 如需允许所有钉钉用户访问：DINGTALK_ALLOW_ALL_USERS=true
 EOF
 
 python main.py
@@ -95,7 +91,7 @@ ACCESS_SECRET=your-alibaba-cloud-access-key-secret
 FEISHU_APP_ID=your-feishu-app-id
 FEISHU_APP_SECRET=your-feishu-app-secret
 FEISHU_ALLOWED_USERS=open-id-1,union-id-2
-# 本地验证可临时改用：FEISHU_ALLOW_ALL_USERS=true
+# 如需允许所有飞书用户访问：FEISHU_ALLOW_ALL_USERS=true
 # 国际版 Lark 可设置：FEISHU_DOMAIN=lark
 EOF
 
@@ -118,7 +114,7 @@ python main.py
 
 ## 企业微信 WeCom AI Bot
 
-在 [企业微信管理后台](https://work.weixin.qq.com/wework_admin/frame#/apps) 创建或配置智能机器人，获取 Bot ID 和 Secret。当前只考虑 WeCom AI Bot WebSocket 长连接模式。
+在 [企业微信管理后台](https://work.weixin.qq.com/wework_admin/frame#/apps) 安全与管理 -> 管理工具 -> 智能机器人 里面创建或配置智能机器人，获取 Bot ID 和 Secret。当前支持 WeCom AI Bot WebSocket 长连接模式。
 
 ```bash
 cat > .env <<'EOF'
@@ -129,7 +125,7 @@ ACCESS_SECRET=your-alibaba-cloud-access-key-secret
 WECOM_BOT_ID=your-wecom-ai-bot-id
 WECOM_SECRET=your-wecom-ai-bot-secret
 WECOM_ALLOWED_USERS=wecom-userid-1,wecom-userid-2
-# 本地验证可临时改用：WECOM_ALLOW_ALL_USERS=true
+# 如需允许所有企业微信用户访问：WECOM_ALLOW_ALL_USERS=true
 EOF
 
 python main.py
@@ -162,7 +158,7 @@ ACCESS_SECRET=your-alibaba-cloud-access-key-secret
 QQ_APP_ID=your-qq-bot-app-id
 QQ_CLIENT_SECRET=your-qq-bot-client-secret
 QQ_ALLOWED_USERS=user-openid-1,user-openid-2
-# 本地验证可临时改用：QQ_ALLOW_ALL_USERS=true
+# 如需允许所有 QQ 用户访问：QQ_ALLOW_ALL_USERS=true
 EOF
 
 python main.py
@@ -188,12 +184,13 @@ python main.py
 | `/help` | 查看短命令帮助。 |
 | `/btw` | 查看当前正在运行任务已经收到的回复内容。 |
 | `/stop` | 停止当前正在运行的 RDS AI 任务。 |
+| `/session` | 查看当前多轮状态；开启时返回当前 `ConversationId`。 |
 | `/session on` | 开启多轮对话保持（默认）。 |
 | `/session off` | 关闭多轮对话保持，并清除当前保存的 `ConversationId`。 |
-| `/session status` | 查看当前多轮状态；开启时返回当前 `ConversationId`。 |
 | `/session ls` | 拉取最近的 RDS AI 对话列表。 |
 | `/session <id>` | 切换到指定对话，`id` 支持完整 ID 或最近列表中的 8 位短 ID。 |
 | `/new` | 清除当前 `ConversationId`，下一条普通消息开启新对话。 |
+| `/agent` | 查看当前会话绑定的 Custom Agent；未绑定时显示默认 RDS Copilot。 |
 | `/agent ls` | 拉取 Custom Agent 列表。 |
 | `/agent <agent-name>` | 使用最近列表中的 Agent 名称切换当前会话的 Custom Agent。 |
 | `/agent default` | 清除当前 Custom Agent，恢复默认 RDS Copilot。 |
@@ -203,9 +200,9 @@ python main.py
 | `/tz <timezone>` | 切换当前会话时区，例如 `/tz Asia/Shanghai`；仅接受本机存在的 IANA 时区。 |
 | `/skills` | 按当前语言拉取 Skill 列表，默认第 1 页。 |
 | `/skills <page>` | 拉取指定页 Skill 列表，例如 `/skills 2`。 |
+| `/card` | 钉钉查看当前卡片回复状态。 |
 | `/card on` | 钉钉开启 AI 卡片回复。 |
 | `/card off` | 钉钉关闭 AI 卡片回复（默认），改为普通消息回复。 |
-| `/card status` | 钉钉查看当前卡片回复状态。 |
 
 ## 目录结构
 

@@ -22,6 +22,7 @@ from core.bot_core import (
     run_still_working_notifier,
     should_accept_session_source,
 )
+from core.error_detail import http_error_detail
 from core.rds_copilot import RdsCopilot
 
 try:
@@ -248,9 +249,13 @@ class QQBridge:
             except Exception as e:
                 status_code = getattr(getattr(e, "response", None), "status_code", None)
                 if path == QQ_TOKEN_URL and status_code in (401, 403):
+                    detail = http_error_detail(e)
+                    suffix = f" QQ/网络返回：{detail}" if detail else ""
                     raise RuntimeError(
                         "QQ Bot 鉴权失败：获取 access token 被拒绝。"
-                        "请检查 QQ_APP_ID 和 QQ_CLIENT_SECRET 是否正确。"
+                        "请检查 QQ_APP_ID 和 QQ_CLIENT_SECRET 是否正确，"
+                        "并确认当前网络允许访问 bots.qq.com。"
+                        f"{suffix}"
                     ) from e
                 raise
             data = response.json()
@@ -367,7 +372,8 @@ class QQBridge:
         context = BotContext(source.platform, source.chat_id, source.user_id, self.store)
         control_result = await handle_control_command(query_text, context, self.copilot_factory, card_supported=False)
         if control_result.handled:
-            await self.send_text(source, control_result.content)
+            for content in control_result.response_contents():
+                await self.send_text(source, content)
             return
 
         language = self.store.get_language(source.chat_id, source.user_id, platform=QQ_PLATFORM)

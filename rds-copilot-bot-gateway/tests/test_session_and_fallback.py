@@ -216,7 +216,8 @@ class SessionStoreTest(unittest.TestCase):
     def test_session_command_matches_exact_text_only(self):
         self.assertEqual(bot_core.parse_session_command("/session on"), "on")
         self.assertEqual(bot_core.parse_session_command("  /session off  "), "off")
-        self.assertEqual(bot_core.parse_session_command("  /session status  "), "status")
+        self.assertEqual(bot_core.parse_session_command("  /session  "), "status")
+        self.assertEqual(bot_core.parse_session_command("  /session status  "), "")
         self.assertEqual(bot_core.parse_session_command("  /session ls  "), "ls")
         self.assertEqual(bot_core.parse_session_command("  /session 60b335ca  "), "checkout")
         self.assertEqual(bot_core.parse_session_command("  /session 60b335ca-124d-4ee1-864b-de554987abcd  "), "checkout")
@@ -229,7 +230,8 @@ class SessionStoreTest(unittest.TestCase):
     def test_card_command_matches_exact_text_only(self):
         self.assertEqual(bot_core.parse_card_command("/card on"), "on")
         self.assertEqual(bot_core.parse_card_command("  /card off  "), "off")
-        self.assertEqual(bot_core.parse_card_command("  /card status  "), "status")
+        self.assertEqual(bot_core.parse_card_command("  /card  "), "status")
+        self.assertEqual(bot_core.parse_card_command("  /card status  "), "")
         self.assertEqual(bot_core.parse_card_command("/card  on"), "")
         self.assertEqual(bot_core.parse_card_command("/card off please"), "")
         self.assertEqual(bot_core.parse_card_command("How to use /card off?"), "")
@@ -352,16 +354,24 @@ class BotCoreRuntimeAndCommandTest(unittest.IsolatedAsyncioTestCase):
 
             self.assertFalse(result.handled)
 
-    async def test_invalid_skills_argument_is_sent_to_copilot(self):
+    async def test_invalid_single_argument_short_commands_return_help(self):
         with tempfile.TemporaryDirectory() as tmp_dir:
             store = bot_core.CopilotConversationStore(f"{tmp_dir}/conversations.json")
             context = bot_core.BotContext("dingtalk", "ding-conv-1", "sender-1", store)
 
-            result = await bot_core.handle_control_command("/skills abc", context, FakeRpcClient())
+            skills_result = await bot_core.handle_control_command("/skills abc", context, FakeRpcClient())
+            session_result = await bot_core.handle_control_command("/session fof", context, FakeRpcClient())
+            card_result = await bot_core.handle_control_command("/card status", context, FakeRpcClient())
             language_result = await bot_core.handle_control_command("/skills en-US", context, FakeRpcClient())
 
-            self.assertFalse(result.handled)
-            self.assertFalse(language_result.handled)
+            self.assertTrue(skills_result.handled)
+            self.assertIn("短命令参数不正确", skills_result.content)
+            self.assertIn("### RDS Copilot 短命令", skills_result.content)
+            self.assertTrue(session_result.handled)
+            self.assertIn("`/session fof`", session_result.content)
+            self.assertTrue(card_result.handled)
+            self.assertIn("`/card status`", card_result.content)
+            self.assertTrue(language_result.handled)
 
     async def test_session_status_reports_on_and_current_conversation_id(self):
         with tempfile.TemporaryDirectory() as tmp_dir:
@@ -369,11 +379,14 @@ class BotCoreRuntimeAndCommandTest(unittest.IsolatedAsyncioTestCase):
             store.set("ding-conv-1", "sender-1", "conv-1", platform="dingtalk")
             context = bot_core.BotContext("dingtalk", "ding-conv-1", "sender-1", store)
 
-            result = await bot_core.handle_control_command("/session status", context, FakeRpcClient())
+            result = await bot_core.handle_control_command("/session", context, FakeRpcClient())
+            legacy_status = await bot_core.handle_control_command("/session status", context, FakeRpcClient())
 
             self.assertTrue(result.handled)
             self.assertIn("会话状态：`on`", result.content)
             self.assertIn("ConversationId：`conv-1`", result.content)
+            self.assertTrue(legacy_status.handled)
+            self.assertIn("短命令参数不正确", legacy_status.content)
 
     async def test_session_ls_caches_conversations_and_checkout_short_id_switches_context(self):
         with tempfile.TemporaryDirectory() as tmp_dir:
@@ -442,12 +455,18 @@ class BotCoreRuntimeAndCommandTest(unittest.IsolatedAsyncioTestCase):
                 "Data": [{"Id": "agent-1", "Name": "日志分析 Agent", "EnableTools": True, "Tools": ["describe_db_instances"]}]
             }
 
+            default_status = await bot_core.handle_control_command("/agent", context, copilot)
             ls_result = await bot_core.handle_control_command("/agent ls", context, copilot)
             select_result = await bot_core.handle_control_command("/agent 日志分析 Agent", context, copilot)
+            selected_status = await bot_core.handle_control_command("/agent", context, copilot)
 
+            self.assertTrue(default_status.handled)
+            self.assertIn("默认 RDS Copilot", default_status.content)
             self.assertTrue(ls_result.handled)
             self.assertIn("日志分析 Agent", ls_result.content)
             self.assertTrue(select_result.handled)
+            self.assertIn("日志分析 Agent", selected_status.content)
+            self.assertIn("agent-1", selected_status.content)
             self.assertEqual(
                 store.get_agent("oc_chat_1", "ou_user_1", platform="feishu"),
                 {"id": "agent-1", "name": "日志分析 Agent"},
@@ -485,7 +504,7 @@ class BotCoreRuntimeAndCommandTest(unittest.IsolatedAsyncioTestCase):
             default_help = await bot_core.handle_control_command("/help", context, copilot)
             self.assertTrue(default_help.handled)
             self.assertIn("### RDS Copilot 短命令", default_help.content)
-            self.assertIn("- `/session on|off|status|ls|<id>`", default_help.content)
+            self.assertIn("- `/session|on|off|ls|<id>`", default_help.content)
             self.assertNotIn("RDS Copilot commands", default_help.content)
 
             english_switch = await bot_core.handle_control_command("/language en-US", context, copilot)
@@ -515,6 +534,8 @@ class BotCoreRuntimeAndCommandTest(unittest.IsolatedAsyncioTestCase):
         stop = await bot_core.handle_control_command("/stop", context, copilot)
 
         self.assertIn("partial answer", btw.content)
+        self.assertEqual(stop.content, "已停止当前任务。")
+        self.assertEqual(stop.response_contents(), ["partial answer", "已停止当前任务。"])
         self.assertIn("已停止", stop.content)
         copilot.stop_task.assert_called_once_with("task-1")
 
@@ -770,7 +791,7 @@ class CardBotHandlerCommandTest(unittest.IsolatedAsyncioTestCase):
     async def test_card_status_reports_current_card_setting(self):
         with tempfile.TemporaryDirectory() as tmp_dir, \
             patch.dict("os.environ", {"RDS_COPILOT_CONVERSATION_STORE_FILE": f"{tmp_dir}/conversations.json"}), \
-            patch("bridges.dingtalk.dingtalk_stream.ChatbotMessage.from_dict", return_value=FakeIncomingMessage("/card status")):
+            patch("bridges.dingtalk.dingtalk_stream.ChatbotMessage.from_dict", return_value=FakeIncomingMessage("/card")):
             store = dingtalk_bridge.get_copilot_conversation_store()
             store.set_card_enabled("ding-conv-1", "sender-1", False)
             handler = dingtalk_bridge.CardBotHandler(logger=logging.getLogger("test"))

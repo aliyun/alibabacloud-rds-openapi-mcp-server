@@ -12,6 +12,7 @@ import time
 import unittest
 from types import SimpleNamespace
 from unittest.mock import AsyncMock, Mock, patch
+from urllib import error as urllib_error
 
 import importlib
 import main
@@ -665,10 +666,16 @@ class BotCoreCoverageTest(unittest.IsolatedAsyncioTestCase):
             )
             registry.finish(empty_state)
             self.assertIn("enabled", (await bot_core.handle_control_command("/card on", context, copilot)).content)
-            self.assertIn("Card replies: `on`", (await bot_core.handle_control_command("/card status", context, copilot)).content)
+            self.assertIn("Card replies: `on`", (await bot_core.handle_control_command("/card", context, copilot)).content)
+            invalid_card = await bot_core.handle_control_command("/card status", context, copilot)
+            self.assertTrue(invalid_card.handled)
+            self.assertIn("Invalid command argument", invalid_card.content)
             self.assertIn("disabled", (await bot_core.handle_control_command("/card off", context, copilot)).content)
             self.assertIn("enabled", (await bot_core.handle_control_command("/session on", context, copilot)).content)
-            self.assertIn("Session: `on`", (await bot_core.handle_control_command("/session status", context, copilot)).content)
+            self.assertIn("Session: `on`", (await bot_core.handle_control_command("/session", context, copilot)).content)
+            invalid_session = await bot_core.handle_control_command("/session status", context, copilot)
+            self.assertTrue(invalid_session.handled)
+            self.assertIn("Invalid command argument", invalid_session.content)
             sessions = await bot_core.handle_control_command("/session ls", context, copilot)
             copilot.list_conversations.assert_called_with(limit=10, sort_by="UpdatedAt")
             self.assertLess(sessions.content.index("abcdef12"), sessions.content.index("oldconv1"))
@@ -677,11 +684,13 @@ class BotCoreCoverageTest(unittest.IsolatedAsyncioTestCase):
             self.assertIn("Checked out", (await bot_core.handle_control_command("/session abcdef12", context, copilot)).content)
             self.assertIn("Checked out", (await bot_core.handle_control_command("/session 01234567-89ab-cdef-0123-456789abcdef", context, copilot)).content)
             self.assertIn("disabled", (await bot_core.handle_control_command("/session off", context, copilot)).content)
-            self.assertIn("Session: `off`", (await bot_core.handle_control_command("/session status", context, copilot)).content)
+            self.assertIn("Session: `off`", (await bot_core.handle_control_command("/session", context, copilot)).content)
             self.assertIn("Started a new conversation", (await bot_core.handle_control_command("/new", context, copilot)).content)
             self.assertIn("Agent A", (await bot_core.handle_control_command("/agent ls", context, copilot)).content)
+            self.assertIn("default", (await bot_core.handle_control_command("/agent", context, copilot)).content)
             self.assertIn("Agent not found", (await bot_core.handle_control_command("/agent Missing", context, copilot)).content)
             self.assertIn("selected", (await bot_core.handle_control_command("/agent Agent A", context, copilot)).content)
+            self.assertIn("Agent A", (await bot_core.handle_control_command("/agent", context, copilot)).content)
             self.assertIn("default", (await bot_core.handle_control_command("/agent default", context, copilot)).content)
             self.assertIn("言語を `ja-JP`", (await bot_core.handle_control_command("/language JA_jp", context, copilot)).content)
             self.assertIn("タイムゾーンを `Asia/Tokyo`", (await bot_core.handle_control_command("/tz Asia/Tokyo", context, copilot)).content)
@@ -692,8 +701,9 @@ class BotCoreCoverageTest(unittest.IsolatedAsyncioTestCase):
             self.assertIn("未対応のタイムゾーン", (await bot_core.handle_control_command("/tz Mars/Base", context, copilot)).content)
             self.assertIn("sql-review", (await bot_core.handle_control_command("/skills 2", context, copilot)).content)
             copilot.list_skills.assert_called_with(page_number=2, page_size=20, language="ja-JP")
-            self.assertFalse((await bot_core.handle_control_command("/skills ja-JP", context, copilot)).handled)
-            self.assertFalse((await bot_core.handle_control_command("/skills klingon", context, copilot)).handled)
+            self.assertIn("コマンド引数が正しくありません", (await bot_core.handle_control_command("/skills ja-JP", context, copilot)).content)
+            self.assertIn("コマンド引数が正しくありません", (await bot_core.handle_control_command("/skills klingon", context, copilot)).content)
+            self.assertIn("コマンド引数が正しくありません", (await bot_core.handle_control_command("/session abc", context, copilot)).content)
             self.assertFalse((await bot_core.handle_control_command("/session normal question", context, copilot)).handled)
             self.assertFalse((await bot_core.handle_control_command("/session checkout abcdef12", context, copilot)).handled)
             self.assertFalse((await bot_core.handle_control_command("/sql-review select 1", context, copilot)).handled)
@@ -917,7 +927,18 @@ class FeishuBridgeCoverageTest(unittest.IsolatedAsyncioTestCase):
                 feishu_bridge.validate_feishu_startup(app_id="", app_secret="")
 
         with patch("bridges.feishu.urllib_request.urlopen", side_effect=OSError("network down")):
-            with self.assertRaisesRegex(RuntimeError, "飞书鉴权失败"):
+            with self.assertRaisesRegex(RuntimeError, "飞书鉴权失败[\\s\\S]*network down"):
+                feishu_bridge.validate_feishu_startup(app_id="cli_xxx", app_secret="secret_xxx")
+
+        feishu_http_error = urllib_error.HTTPError(
+            "https://open.feishu.cn/open-apis/auth/v3/tenant_access_token/internal",
+            403,
+            "Forbidden",
+            {},
+            io.BytesIO("proxy blocked feishu".encode("utf-8")),
+        )
+        with patch("bridges.feishu.urllib_request.urlopen", side_effect=feishu_http_error):
+            with self.assertRaisesRegex(RuntimeError, "飞书鉴权失败[\\s\\S]*proxy blocked feishu"):
                 feishu_bridge.validate_feishu_startup(app_id="cli_xxx", app_secret="secret_xxx")
 
         with patch("bridges.feishu.urllib_request.urlopen", return_value=FakeFeishuAuthResponse({"code": 999, "msg": "bad app"})):
@@ -1190,6 +1211,23 @@ class FeishuBridgeCoverageTest(unittest.IsolatedAsyncioTestCase):
 
         await bridge.handle_text_message(chat_id="chat", sender_id="sender", message_id="msg", text="/help")
         self.assertIn("/session", bridge.send_text.await_args.args[1])
+
+        stop_copilot = FakeCopilot()
+        registry = bot_core.ActiveConversationRegistry()
+        state = registry.start(bot_core.BotContext("feishu", "chat", "sender", store, registry=registry))
+        state.record_task_id("task-stop-1")
+        state.record_message("partial feishu answer")
+        stop_bridge = feishu_bridge.FeishuBridge(
+            app_id="cli",
+            app_secret="secret",
+            store=store,
+            copilot_factory=lambda: stop_copilot,
+        )
+        stop_bridge.send_text = AsyncMock(return_value=True)
+        with patch("core.bot_core.get_active_registry", return_value=registry):
+            await stop_bridge.handle_text_message(chat_id="chat", sender_id="sender", message_id="msg", text="/stop")
+        self.assertEqual([call.args[1] for call in stop_bridge.send_text.await_args_list], ["partial feishu answer", "已停止当前任务。"])
+        self.assertEqual(stop_copilot.stopped, ["task-stop-1"])
 
         registry = bot_core.ActiveConversationRegistry()
         registry.start(bot_core.BotContext("feishu", "chat", "sender", store, registry=registry))
@@ -1466,6 +1504,30 @@ class WeComBridgeCoverageTest(unittest.IsolatedAsyncioTestCase):
         self.assertEqual(startup_ws.sent[0]["cmd"], wecom_bridge.APP_CMD_SUBSCRIBE)
         self.assertTrue(startup_ws.closed)
 
+        class AuthFailedWebSocket(FakeWebSocket):
+            async def receive(self):
+                req_id = self.sent[0]["headers"]["req_id"]
+                return SimpleNamespace(
+                    type=wecom_bridge.aiohttp.WSMsgType.TEXT,
+                    data=json.dumps(
+                        {
+                            "headers": {"req_id": req_id},
+                            "errcode": 40001,
+                            "errmsg": "invalid bot secret",
+                            "trace_id": "trace-wecom-1",
+                        }
+                    ),
+                )
+
+        failed_startup = wecom_bridge.WeComBridge(
+            bot_id="bot",
+            secret="secret",
+            store=bot_core.CopilotConversationStore(""),
+        )
+        with patch("bridges.wecom.aiohttp.ClientSession", return_value=FakeSession(AuthFailedWebSocket())):
+            with self.assertRaisesRegex(RuntimeError, "企业微信 WeCom 鉴权失败[\\s\\S]*invalid bot secret[\\s\\S]*trace-wecom-1"):
+                await failed_startup.check_startup()
+
         check_bridge = SimpleNamespace(check_startup=AsyncMock(return_value=None))
         with patch("bridges.wecom.WeComBridge", return_value=check_bridge):
             await asyncio.to_thread(wecom_bridge.validate_wecom_startup)
@@ -1665,6 +1727,20 @@ class WeComBridgeCoverageTest(unittest.IsolatedAsyncioTestCase):
             await bridge.handle_text_message(source=source, text="query", reply_req_id="req-busy")
         self.assertIn("/btw", proactive[-1]["body"]["markdown"]["content"])
 
+        stop_copilot = FakeCopilot()
+        bridge.copilot_factory = lambda: stop_copilot
+        stop_registry = bot_core.ActiveConversationRegistry()
+        stop_state = stop_registry.start(bot_core.BotContext("wecom", "chat-1", "user-1", bridge.store, registry=stop_registry))
+        stop_state.record_task_id("task-stop-wecom")
+        stop_state.record_message("partial wecom answer")
+        proactive.clear()
+        bridge._send_frame = AsyncMock(side_effect=lambda frame: proactive.append(frame) or True)
+        with patch("core.bot_core.get_active_registry", return_value=stop_registry):
+            await bridge.handle_text_message(source=source, text="/stop", reply_req_id="req-stop")
+        self.assertEqual([frame["body"]["markdown"]["content"] for frame in proactive], ["partial wecom answer", "已停止当前任务。"])
+        self.assertEqual(proactive[0]["cmd"], "aibot_respond_msg")
+        self.assertEqual(proactive[1]["cmd"], "aibot_send_msg")
+
         failing = wecom_bridge.WeComBridge(
             bot_id="bot",
             secret="secret",
@@ -1787,7 +1863,10 @@ class QQBridgeCoverageTest(unittest.IsolatedAsyncioTestCase):
             await missing_gateway.get_gateway_url()
 
         auth_failed = qq_bridge.QQBridge(app_id="bad-app", client_secret="bad-secret")
-        response = SimpleNamespace(status_code=403)
+        response = SimpleNamespace(
+            status_code=403,
+            text="抱歉，您要访问的网站不在安全策略默认允许的范围内。请打开云壳-防护记录-域名拦截申请加白。",
+        )
         token_error = RuntimeError("403 Forbidden")
         token_error.response = response
         auth_failed.http_client = SimpleNamespace(
@@ -1795,7 +1874,7 @@ class QQBridgeCoverageTest(unittest.IsolatedAsyncioTestCase):
                 return_value=SimpleNamespace(raise_for_status=Mock(side_effect=token_error))
             )
         )
-        with self.assertRaisesRegex(RuntimeError, "QQ Bot 鉴权失败"):
+        with self.assertRaisesRegex(RuntimeError, "QQ Bot 鉴权失败[\\s\\S]*域名拦截"):
             await auth_failed.ensure_access_token()
 
     async def test_qq_helpers_gateway_control_busy_error_and_send_branches(self):
@@ -2036,6 +2115,23 @@ class QQBridgeCoverageTest(unittest.IsolatedAsyncioTestCase):
         await control.handle_text_message(source=source, text="/help")
         self.assertIn("/session", control._api_request.await_args.args[2]["markdown"]["content"])
 
+        stop_copilot = FakeCopilot()
+        stop_control = qq_bridge.QQBridge(
+            app_id="app",
+            client_secret="secret",
+            store=bot_core.CopilotConversationStore(""),
+            copilot_factory=lambda: stop_copilot,
+        )
+        stop_control._api_request = AsyncMock(return_value={"id": "sent"})
+        stop_registry = bot_core.ActiveConversationRegistry()
+        stop_state = stop_registry.start(bot_core.BotContext("qqbot", "user-1", "user-1", stop_control.store, registry=stop_registry))
+        stop_state.record_task_id("task-stop-qq")
+        stop_state.record_message("partial qq answer")
+        with patch("core.bot_core.get_active_registry", return_value=stop_registry):
+            await stop_control.handle_text_message(source=source, text="/stop")
+        self.assertEqual([call.args[2]["markdown"]["content"] for call in stop_control._api_request.await_args_list], ["partial qq answer", "已停止当前任务。"])
+        self.assertEqual(stop_copilot.stopped, ["task-stop-qq"])
+
         registry = bot_core.ActiveConversationRegistry()
         registry.start(bot_core.BotContext("qqbot", "user-1", "user-1", control.store, registry=registry))
         with patch("core.bot_core.get_active_registry", return_value=registry):
@@ -2196,7 +2292,8 @@ class DingTalkBridgeCoverageTest(unittest.IsolatedAsyncioTestCase):
         validate_one.assert_called_once_with("dingtalk")
         self.assertTrue(bot_core.is_new_conversation_command("/new"))
         self.assertEqual(dingtalk_bridge.parse_session_command("/session on"), "on")
-        self.assertEqual(dingtalk_bridge.parse_card_command("/card status"), "status")
+        self.assertEqual(dingtalk_bridge.parse_card_command("/card"), "status")
+        self.assertEqual(dingtalk_bridge.parse_card_command("/card status"), "")
         self.assertTrue(dingtalk_bridge.is_new_conversation_command("/new"))
         self.assertEqual(dingtalk_bridge.convert_json_values_to_string({"a": 1, "b": "x"}), {"a": "1", "b": "x"})
         self.assertEqual(dingtalk_bridge.get_conversation_store_file_path(), bot_core.get_conversation_store_file_path())
@@ -2427,6 +2524,25 @@ class DingTalkBridgeCoverageTest(unittest.IsolatedAsyncioTestCase):
                 await handler.process(callback)
             self.assertIn("/btw", handler.reply_text.call_args.args[0])
 
+        with tempfile.TemporaryDirectory() as tmp_dir:
+            store_path = os.path.join(tmp_dir, "conversations.json")
+            store = dingtalk_bridge.JsonCopilotConversationStore(store_path)
+            registry = bot_core.ActiveConversationRegistry()
+            context = bot_core.BotContext("dingtalk", "ding-conv-1", "sender-1", store, registry=registry)
+            state = registry.start(context)
+            state.record_task_id("task-stop-ding")
+            state.record_message("partial dingtalk answer")
+            stop_copilot = FakeCopilot()
+            handler = dingtalk_bridge.CardBotHandler(logger=Mock())
+            handler.reply_text = Mock()
+            with patch.dict(os.environ, {"RDS_COPILOT_CONVERSATION_STORE_FILE": store_path, "GATEWAY_ALLOW_ALL_USERS": "true"}), \
+                patch("core.bot_core.get_active_registry", return_value=registry), \
+                patch("core.bot_core.RdsCopilot", return_value=stop_copilot), \
+                patch("bridges.dingtalk.dingtalk_stream.ChatbotMessage.from_dict", return_value=FakeIncomingMessage("/stop")):
+                await handler.process(callback)
+            self.assertEqual([call.args[0] for call in handler.reply_text.call_args_list], ["partial dingtalk answer", "已停止当前任务。"])
+            self.assertEqual(stop_copilot.stopped, ["task-stop-ding"])
+
         async def run_process(card_enabled, callback_data):
             with tempfile.TemporaryDirectory() as tmp_dir:
                 store_path = os.path.join(tmp_dir, "conversations.json")
@@ -2558,17 +2674,54 @@ class DingTalkBridgeCoverageTest(unittest.IsolatedAsyncioTestCase):
         client.register_callback_handler.assert_called_once()
         client.start_forever.assert_called_once()
 
-        with patch("bridges.dingtalk.define_options", return_value=SimpleNamespace(client_id="cid", client_secret="secret")), \
-            patch("bridges.dingtalk.dingtalk_stream.Credential", return_value="credential"), \
-            patch("bridges.dingtalk.dingtalk_stream.DingTalkStreamClient") as startup_client_cls:
-            startup_client = startup_client_cls.return_value
-            startup_client.open_connection.return_value = {"endpoint": "wss://example", "ticket": "ticket"}
-            dingtalk_bridge.validate_dingtalk_startup()
-            startup_client.open_connection.assert_called_once()
+        class FakeDingStartupResponse:
+            def __init__(self, payload):
+                self.payload = payload
 
-            startup_client.open_connection.reset_mock()
-            startup_client.open_connection.return_value = None
+            def __enter__(self):
+                return self
+
+            def __exit__(self, exc_type, exc, traceback):
+                return False
+
+            def read(self):
+                return json.dumps(self.payload).encode("utf-8")
+
+        fake_success_client = SimpleNamespace(
+            callback_handler_map={dingtalk_bridge.dingtalk_stream.ChatbotMessage.TOPIC: object()},
+            get_host_ip=lambda: "127.0.0.1",
+        )
+        with patch("bridges.dingtalk.define_options", return_value=SimpleNamespace(client_id="cid", client_secret="secret")), \
+            patch("bridges.dingtalk.build_dingtalk_stream_client", return_value=fake_success_client), \
+            patch("bridges.dingtalk.urllib_request.urlopen", return_value=FakeDingStartupResponse({"endpoint": "wss://example", "ticket": "ticket"})) as startup_urlopen:
+            dingtalk_bridge.validate_dingtalk_startup()
+            startup_urlopen.assert_called_once()
+
+        with patch("bridges.dingtalk.define_options", return_value=SimpleNamespace(client_id="cid", client_secret="secret")), \
+            patch("bridges.dingtalk.build_dingtalk_stream_client", return_value=fake_success_client), \
+            patch(
+                "bridges.dingtalk.urllib_request.urlopen",
+                return_value=FakeDingStartupResponse({"code": "InvalidClient", "message": "bad ding app"}),
+            ):
             with self.assertRaisesRegex(RuntimeError, "钉钉 Stream 鉴权失败"):
+                dingtalk_bridge.validate_dingtalk_startup()
+
+        dingtalk_http_error = urllib_error.HTTPError(
+            "https://api.dingtalk.com/v1.0/gateway/connections/open",
+            403,
+            "Forbidden",
+            {},
+            io.BytesIO("ding blocked by gateway".encode("utf-8")),
+        )
+        fake_ding_client = SimpleNamespace(
+            callback_handler_map={dingtalk_bridge.dingtalk_stream.ChatbotMessage.TOPIC: object()},
+            credential=SimpleNamespace(client_id="cid", client_secret="secret"),
+            get_host_ip=lambda: "127.0.0.1",
+        )
+        with patch("bridges.dingtalk.define_options", return_value=SimpleNamespace(client_id="cid", client_secret="secret")), \
+            patch("bridges.dingtalk.build_dingtalk_stream_client", return_value=fake_ding_client), \
+            patch("bridges.dingtalk.urllib_request.urlopen", side_effect=dingtalk_http_error):
+            with self.assertRaisesRegex(RuntimeError, "钉钉 Stream 鉴权失败[\\s\\S]*ding blocked by gateway"):
                 dingtalk_bridge.validate_dingtalk_startup()
 
         attempts = []
