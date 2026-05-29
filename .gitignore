@@ -21,7 +21,8 @@ dist/
 .env.*
 !.env.example
 copilot_conversations.json
-ecological-integration/dingtalk/HANDOFF_SECRETS.md
+rds-copilot-bot-gateway/rds-copilot.log
+rds-copilot-bot-gateway/dingding_bot_*.log
 
 # IDE and editor files
 .idea/

@@ -5,6 +5,7 @@ import asyncio
 import argparse
 import time
 import inspect
+import contextlib
 from queue import Queue
 from concurrent.futures import ThreadPoolExecutor
 from urllib import error as urllib_error
@@ -24,19 +25,31 @@ try:
     from alibabacloud_tea_util import models as tea_util_models
 
     DINGTALK_ROBOT_SDK_AVAILABLE = True
-except ImportError:
+except ImportError:  # pragma: no cover - optional DingTalk robot SDK fallback
     dingtalk_robot_client = None
     dingtalk_robot_models = None
     open_api_models = None
     tea_util_models = None
     DINGTALK_ROBOT_SDK_AVAILABLE = False
-from rds_copilot import (
+from core.rds_copilot import (
     RdsCopilot, 
     MessageEvent, 
     ToolCallStart, 
     ToolCallPending, 
     ToolCallEnd, 
     DocumentEvent
+)
+from core import bot_core
+from core.bot_core import (
+    BotContext,
+    CopilotConversationStore as SharedCopilotConversationStore,
+    SessionSource,
+    authorize_session_source,
+    build_busy_content,
+    get_active_registry,
+    handle_control_command,
+    run_still_working_notifier,
+    should_accept_session_source,
 )
 
 
@@ -51,7 +64,10 @@ def define_options():
     options = parser.parse_args()
     options.client_secret = os.getenv("DINGTALK_APP_CLIENT_SECRET")
     if not options.client_id or not options.client_secret:
-        parser.error("DINGTALK_APP_CLIENT_ID and DINGTALK_APP_CLIENT_SECRET must be set in environment variables.")
+        parser.error(
+            "缺少钉钉凭证：请在 .env 中配置 DINGTALK_APP_CLIENT_ID 和 "
+            "DINGTALK_APP_CLIENT_SECRET，或在启动前 export。"
+        )
     return options
 
 
@@ -66,26 +82,14 @@ def convert_json_values_to_string(obj: dict) -> dict:
     return result
 
 
-def build_error_card_content(error: Exception) -> str:
-    """Build user-visible English error content for failed Copilot calls."""
-    error_type = error.__class__.__name__
-    error_message = str(error).strip()
-    error_detail = f"{error_type}: {error_message}" if error_message else error_type
-    if len(error_detail) > 500:
-        error_detail = f"{error_detail[:500]}..."
-    return (
-        "RDS AI diagnosis failed and could not generate a complete response.\n\n"
-        f"Error: {error_detail}\n\n"
-        "Please try again later or contact the service maintainer to check the logs."
-    )
+def build_error_card_content(error: Exception, language: str = bot_core.DEFAULT_LANGUAGE) -> str:
+    """Build user-visible localized error content for failed Copilot calls."""
+    return bot_core.build_error_content(error, language=language)
 
 
-def build_no_message_card_content() -> str:
-    """Build user-visible English fallback content when Copilot returns no message."""
-    return (
-        "RDS AI finished, but no response content was returned.\n\n"
-        "Please try again later or contact the service maintainer to check the logs."
-    )
+def build_no_message_card_content(language: str = bot_core.DEFAULT_LANGUAGE) -> str:
+    """Build user-visible localized fallback content when Copilot returns no message."""
+    return bot_core.build_no_message_content(language=language)
 
 
 CONVERSATION_STORE_FILE_ENV = "RDS_COPILOT_CONVERSATION_STORE_FILE"
@@ -99,26 +103,16 @@ MAX_PLAIN_MESSAGE_LENGTH = 20000
 
 def parse_session_command(text: str) -> str:
     """Only match exact session commands so normal Copilot questions are not intercepted."""
-    normalized_text = (text or "").strip()
-    if normalized_text == SESSION_ON_COMMAND:
-        return "on"
-    if normalized_text == SESSION_OFF_COMMAND:
-        return "off"
-    return ""
+    return bot_core.parse_session_command(text)
 
 
 def parse_card_command(text: str) -> str:
     """Only match exact card commands so normal Copilot questions are not intercepted."""
-    normalized_text = (text or "").strip()
-    if normalized_text == CARD_ON_COMMAND:
-        return "on"
-    if normalized_text == CARD_OFF_COMMAND:
-        return "off"
-    return ""
+    return bot_core.parse_card_command(text)
 
 
 def is_new_conversation_command(text: str) -> bool:
-    return (text or "").strip().lower() == "/new"
+    return bot_core.is_new_conversation_command(text)
 
 
 def get_conversation_store_file_path() -> str:
@@ -128,166 +122,9 @@ def get_conversation_store_file_path() -> str:
     )
 
 
-class JsonCopilotConversationStore:
-    """Persist Copilot ConversationId by DingTalk conversation and sender."""
-
-    def __init__(self, file_path: str):
-        self.file_path = file_path
-
-    @staticmethod
-    def _key(dingtalk_conversation_id: str, sender_id: str) -> str:
-        if not dingtalk_conversation_id or not sender_id:
-            return ""
-        return json.dumps(
-            [dingtalk_conversation_id, sender_id],
-            ensure_ascii=False,
-            separators=(",", ":"),
-        )
-
-    def _empty_data(self) -> dict:
-        return {"version": 1, "conversations": {}}
-
-    def _load(self) -> dict:
-        if not self.file_path or not os.path.exists(self.file_path):
-            return self._empty_data()
-
-        try:
-            with open(self.file_path, "r", encoding="utf-8") as f:
-                data = json.load(f)
-        except (OSError, json.JSONDecodeError) as e:
-            logger.warning(f"Failed to load Copilot conversation store: {e}")
-            return self._empty_data()
-
-        if not isinstance(data, dict) or not isinstance(data.get("conversations"), dict):
-            return self._empty_data()
-        return data
-
-    def _save(self, data: dict):
-        store_dir = os.path.dirname(os.path.abspath(self.file_path))
-        os.makedirs(store_dir, exist_ok=True)
-        tmp_file_path = f"{self.file_path}.tmp.{os.getpid()}"
-        with open(tmp_file_path, "w", encoding="utf-8") as f:
-            json.dump(data, f, ensure_ascii=False, indent=2, sort_keys=True)
-            f.write("\n")
-        os.replace(tmp_file_path, self.file_path)
-
-    def get(self, dingtalk_conversation_id: str, sender_id: str) -> str:
-        key = self._key(dingtalk_conversation_id, sender_id)
-        if not key:
-            return ""
-
-        item = self._load().get("conversations", {}).get(key, {})
-        if not isinstance(item, dict):
-            return ""
-        return item.get("copilot_conversation_id") or ""
-
-    def is_session_enabled(self, dingtalk_conversation_id: str, sender_id: str) -> bool:
-        key = self._key(dingtalk_conversation_id, sender_id)
-        if not key:
-            return True
-
-        item = self._load().get("conversations", {}).get(key)
-        if not isinstance(item, dict) or "session_enabled" not in item:
-            return True
-        return item.get("session_enabled") is True
-
-    def is_card_enabled(self, dingtalk_conversation_id: str, sender_id: str) -> bool:
-        key = self._key(dingtalk_conversation_id, sender_id)
-        if not key:
-            return True
-
-        item = self._load().get("conversations", {}).get(key)
-        if not isinstance(item, dict):
-            return True
-        return item.get("card_enabled") is not False
-
-    def set_session_enabled(self, dingtalk_conversation_id: str, sender_id: str, enabled: bool):
-        key = self._key(dingtalk_conversation_id, sender_id)
-        if not key:
-            return
-
-        data = self._load()
-        conversations = data.setdefault("conversations", {})
-        item = conversations.get(key, {})
-        if not isinstance(item, dict):
-            item = {}
-
-        item.update(
-            {
-                "dingtalk_conversation_id": dingtalk_conversation_id,
-                "sender_id": sender_id,
-                "session_enabled": bool(enabled),
-                "updated_at": int(time.time()),
-            }
-        )
-        if not enabled:
-            item["copilot_conversation_id"] = ""
-
-        conversations[key] = item
-        self._save(data)
-
-    def set_card_enabled(self, dingtalk_conversation_id: str, sender_id: str, enabled: bool):
-        key = self._key(dingtalk_conversation_id, sender_id)
-        if not key:
-            return
-
-        data = self._load()
-        conversations = data.setdefault("conversations", {})
-        item = conversations.get(key, {})
-        if not isinstance(item, dict):
-            item = {}
-
-        item.update(
-            {
-                "dingtalk_conversation_id": dingtalk_conversation_id,
-                "sender_id": sender_id,
-                "card_enabled": bool(enabled),
-                "updated_at": int(time.time()),
-            }
-        )
-        conversations[key] = item
-        self._save(data)
-
-    def set(self, dingtalk_conversation_id: str, sender_id: str, copilot_conversation_id: str):
-        key = self._key(dingtalk_conversation_id, sender_id)
-        if not key or not copilot_conversation_id:
-            return
-
-        data = self._load()
-        conversations = data.setdefault("conversations", {})
-        item = conversations.get(key, {})
-        if not isinstance(item, dict):
-            item = {}
-        item.update(
-            {
-                "copilot_conversation_id": copilot_conversation_id,
-                "dingtalk_conversation_id": dingtalk_conversation_id,
-                "sender_id": sender_id,
-                "session_enabled": item.get("session_enabled", True) is True,
-                "updated_at": int(time.time()),
-            }
-        )
-        conversations[key] = item
-        self._save(data)
-
-    def clear(self, dingtalk_conversation_id: str, sender_id: str):
-        key = self._key(dingtalk_conversation_id, sender_id)
-        if not key:
-            return
-
-        data = self._load()
-        conversations = data.setdefault("conversations", {})
-        item = conversations.get(key, {})
-        if not isinstance(item, dict):
-            item = {
-                "dingtalk_conversation_id": dingtalk_conversation_id,
-                "sender_id": sender_id,
-                "session_enabled": True,
-            }
-        item["copilot_conversation_id"] = ""
-        item["updated_at"] = int(time.time())
-        conversations[key] = item
-        self._save(data)
+class JsonCopilotConversationStore(SharedCopilotConversationStore):
+    """Backward-compatible DingTalk store alias backed by the shared locked store."""
+    pass
 
 
 def get_copilot_conversation_store() -> JsonCopilotConversationStore:
@@ -555,89 +392,23 @@ async def call_with_stream(
     update_card_callback: Callable,
     rds_copilot: RdsCopilot,
     conversion_id: str = '',
+    *,
+    custom_agent_id: str = "",
+    language: str = bot_core.DEFAULT_LANGUAGE,
+    timezone: str = bot_core.DEFAULT_TIMEZONE,
+    active_state=None,
 ):
-    """处理流式响应（EventMode=separate）：message 流式更新 content，tool_call 只更新 preparations。
-    rds_copilot.chat 为同步阻塞调用，在线程池中执行，避免阻塞 asyncio 导致连接异常。
-    
-    Args:
-        request_content: 用户查询文本
-        update_card_callback: 更新卡片的回调函数
-        rds_copilot: RDS Copilot 实例
-        conversion_id: 对话 ID，用于保持上下文
-        
-    Returns:
-        dict: 包含 content、preparations 和 conversion_id 的字典
-    """
-    full_content = ""
-    preparations = []
-    seen_tool_call_ids = set()  # 相同 tool_call_id 只往卡片推送一次
-    event_queue = Queue()
-    final_conversion_id = conversion_id
-
-    def run_chat_in_thread():
-        nonlocal final_conversion_id
-        try:
-            chat_gen = rds_copilot.chat(request_content, conversion_id)
-            for event in chat_gen:
-                # 从事件对象中获取最新的 conversion_id
-                if hasattr(event, 'conversion_id') and event.conversion_id:
-                    final_conversion_id = event.conversion_id
-                event_queue.put(event)
-        except Exception as e:
-            logger.error(f"对话过程出错：{e}")
-            event_queue.put(e)
-        finally:
-            event_queue.put(None)
-
-    loop = asyncio.get_event_loop()
-    chat_task = loop.run_in_executor(_chat_executor, run_chat_in_thread)
-
-    while True:
-        event = await loop.run_in_executor(_chat_executor, event_queue.get)
-        if event is None:
-            break
-        if isinstance(event, Exception):
-            raise event
-
-        event_type_name = type(event).__name__
-        if isinstance(event, MessageEvent) and event.text:
-            full_content += event.text
-            await update_card_callback({"content": full_content})
-            logger.debug(f"流式更新 content，当前长度: {len(full_content)}")
-
-        elif isinstance(event, (ToolCallStart, ToolCallPending, ToolCallEnd)):
-            try:
-                tool_call_data = json.loads(event.text)
-                tool_call_name = tool_call_data.get("tool_call_name") or tool_call_data.get("ToolCallName", "")
-                tool_call_id = tool_call_data.get("tool_call_id") or tool_call_data.get("ToolCallId", "")
-                logger.info(f"[卡片] 收到 {event_type_name}，tool_call_name={tool_call_name!r}，tool_call_id={tool_call_id!r}")
-                # 相同 tool_call_id 只推送一次
-                if tool_call_id and tool_call_id not in seen_tool_call_ids:
-                    seen_tool_call_ids.add(tool_call_id)
-                    if tool_call_name:
-                        preparations.append({"name": tool_call_name})
-                        await update_card_callback({"preparations": preparations})
-                        logger.info(f"[卡片] 已推送 preparations（tool_call_id 首次），当前: {[p['name'] for p in preparations]}")
-                elif not tool_call_id:
-                    if tool_call_name and tool_call_name not in {p["name"] for p in preparations}:
-                        preparations.append({"name": tool_call_name})
-                        await update_card_callback({"preparations": preparations})
-                        logger.info(f"[卡片] 已推送 preparations（无 tool_call_id），当前: {[p['name'] for p in preparations]}")
-            except (json.JSONDecodeError, KeyError) as e:
-                logger.warning(f"解析 tool_call 事件失败: {e}，event.text 前200字: {event.text[:200]!r}")
-
-        elif isinstance(event, DocumentEvent):
-            logger.info(f"[卡片] 收到 DocumentEvent: {event.title}")
-
-        else:
-            logger.info(f"[卡片] 未处理的事件类型: {event_type_name}")
-
-    await chat_task
-
-    logger.info(
-        f"Request: {request_content[:80]}... | content 长度: {len(full_content)} | preparations: {len(preparations)} | conversion_id: {final_conversion_id}"
+    """Compatibility wrapper around the shared stream runner."""
+    return await bot_core.call_with_stream(
+        request_content,
+        update_card_callback,
+        rds_copilot,
+        conversion_id,
+        custom_agent_id=custom_agent_id,
+        language=language,
+        timezone=timezone,
+        active_state=active_state,
     )
-    return {"content": full_content, "preparations": preparations, "conversion_id": final_conversion_id}
 
 
 async def handle_reply_plain_message(
@@ -646,6 +417,10 @@ async def handle_reply_plain_message(
     callback_data: Any,
     conversion_id: str = "",
     session_enabled: bool = False,
+    custom_agent_id: str = "",
+    language: str = bot_core.DEFAULT_LANGUAGE,
+    timezone: str = bot_core.DEFAULT_TIMEZONE,
+    active_state=None,
 ):
     """Consume the Copilot stream without creating a card, then send the final text as a normal message."""
     trace_id = incoming_message.message_id or f"trace-{int(time.time() * 1000)}"
@@ -662,6 +437,10 @@ async def handle_reply_plain_message(
             update_plain_callback,
             rds_copilot,
             conversion_id,
+            custom_agent_id=custom_agent_id,
+            language=language,
+            timezone=timezone,
+            active_state=active_state,
         )
 
         current_conversion_id = final_contents.get("conversion_id", "")
@@ -673,13 +452,16 @@ async def handle_reply_plain_message(
             )
 
         final_display_content = final_contents.get("content", "")
+        if not final_display_content and final_contents.get("cancelled"):
+            self.logger.info(f"[trace_id={trace_id}] Copilot task was stopped; skip empty fallback reply")
+            return final_contents
         if not final_display_content:
-            final_display_content = build_no_message_card_content()
+            final_display_content = build_no_message_card_content(language)
             self.logger.warning(
                 f"[trace_id={trace_id}] no message returned from RDS AI in plain mode"
             )
     except Exception as e:
-        final_display_content = build_error_card_content(e)
+        final_display_content = build_error_card_content(e, language)
         self.logger.exception(f"[trace_id={trace_id}] handle plain reply failed: {e}")
 
     session_webhook = extract_session_webhook(callback_data, incoming_message)
@@ -700,7 +482,15 @@ async def handle_reply_plain_message(
     return final_contents
 
 
-async def handle_reply_and_update_card(self: dingtalk_stream.ChatbotHandler, incoming_message: dingtalk_stream.ChatbotMessage, conversion_id: str = ''):
+async def handle_reply_and_update_card(
+    self: dingtalk_stream.ChatbotHandler,
+    incoming_message: dingtalk_stream.ChatbotMessage,
+    conversion_id: str = '',
+    custom_agent_id: str = "",
+    language: str = bot_core.DEFAULT_LANGUAGE,
+    timezone: str = bot_core.DEFAULT_TIMEZONE,
+    active_state=None,
+):
     # 卡片模板 ID
     card_template_id = "b22243cf-3171-4097-8c2c-43c3706ef8af.schema"
     
@@ -757,15 +547,25 @@ async def handle_reply_and_update_card(self: dingtalk_stream.ChatbotHandler, inc
         
         # 处理流式响应并更新卡片
         final_contents = await call_with_stream(
-            incoming_message.text.content, update_card_callback, rds_copilot, conversion_id
+            incoming_message.text.content,
+            update_card_callback,
+            rds_copilot,
+            conversion_id,
+            custom_agent_id=custom_agent_id,
+            language=language,
+            timezone=timezone,
+            active_state=active_state,
         )
 
         final_display_content = final_contents.get("content", "")
+        if not final_display_content and final_contents.get("cancelled"):
+            self.logger.info("RDS AI task was stopped; skip no-message card fallback.")
         if not final_display_content:
-            final_display_content = build_no_message_card_content()
-            self.logger.warning("RDS AI finished without response content.")
+            if not final_contents.get("cancelled"):
+                final_display_content = build_no_message_card_content(language)
+                self.logger.warning("RDS AI finished without response content.")
     except Exception as e:
-        final_display_content = build_error_card_content(e)
+        final_display_content = build_error_card_content(e, language)
         self.logger.exception(f"Failed to handle RDS AI card response: {e}")
         try:
             await update_card_callback({"content": final_display_content, "preparations": []})
@@ -800,6 +600,16 @@ class CardBotHandler(dingtalk_stream.ChatbotHandler):
         if logger:
             self.logger = logger
 
+    def reply_command_content(self, content: str, incoming_message):
+        if getattr(incoming_message, "session_webhook", "") and hasattr(self, "reply_markdown"):
+            try:
+                result = self.reply_markdown("RDS Copilot", content, incoming_message)
+                if result is not None:
+                    return result
+            except Exception:
+                self.logger.warning("DingTalk markdown command reply failed", exc_info=True)
+        return self.reply_text(content, incoming_message)
+
     async def process(self, callback: dingtalk_stream.CallbackMessage):
         incoming_message = dingtalk_stream.ChatbotMessage.from_dict(callback.data)
         self.logger.info(f"收到消息：{incoming_message}")
@@ -812,72 +622,100 @@ class CardBotHandler(dingtalk_stream.ChatbotHandler):
         dingtalk_conversation_id = incoming_message.conversation_id
         sender_id = incoming_message.sender_id
         query_text = incoming_message.text.content.strip()
-        session_command = parse_session_command(query_text)
-        card_command = parse_card_command(query_text)
-
-        if session_command:
-            session_enabled = session_command == "on"
-            store.set_session_enabled(
-                dingtalk_conversation_id,
-                sender_id,
-                session_enabled,
-            )
+        source = SessionSource(
+            platform="dingtalk",
+            chat_id=dingtalk_conversation_id or sender_id,
+            chat_type="group" if dingtalk_conversation_id and dingtalk_conversation_id != sender_id else "dm",
+            user_id=sender_id,
+            user_name=getattr(incoming_message, "sender_nick", "") or getattr(incoming_message, "sender_name", "") or "",
+            user_id_alt=getattr(incoming_message, "sender_staff_id", "") or "",
+            is_bot=False,
+        )
+        if not should_accept_session_source(source, query_text) or not authorize_session_source(source):
             self.logger.info(
-                f"Copilot conversation retention changed, "
-                f"session_enabled={session_enabled}, "
-                f"dingtalk_conversation_id={dingtalk_conversation_id}, sender_id={sender_id}"
+                "Unauthorized DingTalk message ignored: chat_id=%s sender_id=%s",
+                source.chat_id,
+                source.user_id,
             )
-            if session_enabled:
-                self.reply_text("Conversation context is enabled.", incoming_message)
-            else:
-                self.reply_text("Conversation context is disabled.", incoming_message)
+            return AckMessage.STATUS_OK, "OK"
+        context = BotContext("dingtalk", dingtalk_conversation_id, sender_id, store)
+
+        control_result = await handle_control_command(query_text, context, card_supported=True)
+        if control_result.handled:
+            self.reply_command_content(control_result.content, incoming_message)
             return AckMessage.STATUS_OK, "OK"
 
-        if card_command:
-            card_enabled = card_command == "on"
-            store.set_card_enabled(
-                dingtalk_conversation_id,
-                sender_id,
-                card_enabled,
-            )
-            self.logger.info(
-                f"DingTalk card reply setting changed, "
-                f"card_enabled={card_enabled}, "
-                f"dingtalk_conversation_id={dingtalk_conversation_id}, sender_id={sender_id}"
-            )
-            if card_enabled:
-                self.reply_text("Card replies are enabled.", incoming_message)
-            else:
-                self.reply_text("Card replies are disabled.", incoming_message)
-            return AckMessage.STATUS_OK, "OK"
-        
-        # 检测 /new 命令，重置对话
-        if is_new_conversation_command(query_text):
-            store.clear(dingtalk_conversation_id, sender_id)
-            self.logger.info(
-                f"Copilot conversation id cleared, "
-                f"dingtalk_conversation_id={dingtalk_conversation_id}, sender_id={sender_id}"
-            )
-            self.reply_text("Started a new conversation.", incoming_message)
+        active_state = context.registry.try_start(context)
+        if active_state is None:
+            language = store.get_language(dingtalk_conversation_id, sender_id)
+            self.reply_text(build_busy_content(language), incoming_message)
             return AckMessage.STATUS_OK, "OK"
 
         session_enabled = store.is_session_enabled(dingtalk_conversation_id, sender_id)
         card_enabled = store.is_card_enabled(dingtalk_conversation_id, sender_id)
+        selected_agent = store.get_agent(dingtalk_conversation_id, sender_id)
+        custom_agent_id = selected_agent.get("id", "")
+        language = store.get_language(dingtalk_conversation_id, sender_id)
+        timezone = store.get_timezone(dingtalk_conversation_id, sender_id)
         # 默认保持多轮上下文；用户可以通过 /session off 为当前会话和发送人关闭。
         conversion_id = store.get(dingtalk_conversation_id, sender_id) if session_enabled else ""
+
+        async def send_status(content: str):
+            session_webhook = extract_session_webhook(callback.data, incoming_message)
+            if session_webhook:
+                await send_dingtalk_session_webhook(
+                    session_webhook,
+                    content,
+                    trace_id=incoming_message.message_id or "",
+                )
+            else:
+                self.reply_text(content, incoming_message)
         
         # 创建异步任务处理回复
         async def handle_and_update_conversation():
-            final_conversion_id = await handle_reply_and_update_card(
-                self, incoming_message, conversion_id
-            )
-            # 按“钉钉会话 + 发送人”持久化 ConversationId，服务重启后仍可保持上下文。
-            if (
-                final_conversion_id
-                and session_enabled
-                and store.is_session_enabled(dingtalk_conversation_id, sender_id)
-            ):
-                store.set(dingtalk_conversation_id, sender_id, final_conversion_id)
+            notifier_task = asyncio.create_task(run_still_working_notifier(active_state, send_status, language=language))
+            try:
+                final_conversion_id = await handle_reply_and_update_card(
+                    self,
+                    incoming_message,
+                    conversion_id,
+                    custom_agent_id=custom_agent_id,
+                    language=language,
+                    timezone=timezone,
+                    active_state=active_state,
+                )
+                # 按“钉钉会话 + 发送人”持久化 ConversationId，服务重启后仍可保持上下文。
+                if (
+                    final_conversion_id
+                    and session_enabled
+                    and store.is_session_enabled(dingtalk_conversation_id, sender_id)
+                ):
+                    store.set(dingtalk_conversation_id, sender_id, final_conversion_id)
+            finally:
+                notifier_task.cancel()
+                with contextlib.suppress(asyncio.CancelledError):
+                    await notifier_task
+                context.registry.finish(active_state)
+
+        async def handle_plain_and_finish():
+            notifier_task = asyncio.create_task(run_still_working_notifier(active_state, send_status, language=language))
+            try:
+                return await handle_reply_plain_message(
+                    self,
+                    incoming_message,
+                    callback.data,
+                    conversion_id=conversion_id,
+                    session_enabled=session_enabled,
+                    custom_agent_id=custom_agent_id,
+                    language=language,
+                    timezone=timezone,
+                    active_state=active_state,
+                )
+            finally:
+                notifier_task.cancel()
+                with contextlib.suppress(asyncio.CancelledError):
+                    await notifier_task
+                context.registry.finish(active_state)
 
         emotion_switcher = DingTalkEmotionSwitcher(self, incoming_message)
         if card_enabled:
@@ -894,29 +732,37 @@ class CardBotHandler(dingtalk_stream.ChatbotHandler):
                 handle_reply_with_emotions(
                     self,
                     incoming_message,
-                    handle_reply_plain_message(
-                        self,
-                        incoming_message,
-                        callback.data,
-                        conversion_id=conversion_id,
-                        session_enabled=session_enabled,
-                    ),
+                    handle_plain_and_finish(),
                     emotion_switcher=emotion_switcher,
                 )
             )
         return AckMessage.STATUS_OK, "OK"
 
 
-def main():
+def run_dingtalk_bridge():
     options = define_options()
 
-    credential = dingtalk_stream.Credential(options.client_id, options.client_secret)
-    client = dingtalk_stream.DingTalkStreamClient(credential)
-    client.register_callback_handler(
-        dingtalk_stream.ChatbotMessage.TOPIC, CardBotHandler()
-    )
+    client = build_dingtalk_stream_client(options)
     client.start_forever()
 
 
-if __name__ == "__main__":
-    main()
+def build_dingtalk_stream_client(options):
+    credential = dingtalk_stream.Credential(options.client_id, options.client_secret)
+    client = dingtalk_stream.DingTalkStreamClient(credential)
+    for logger_name in ("dingtalk_stream", "dingtalk_stream.client"):
+        logging.getLogger(logger_name).setLevel(logging.WARNING)
+    client.register_callback_handler(
+        dingtalk_stream.ChatbotMessage.TOPIC, CardBotHandler()
+    )
+    return client
+
+
+def validate_dingtalk_startup():
+    options = define_options()
+    client = build_dingtalk_stream_client(options)
+    connection = client.open_connection()
+    if not connection:
+        raise RuntimeError(
+            "钉钉 Stream 鉴权失败：请检查 DINGTALK_APP_CLIENT_ID、"
+            "DINGTALK_APP_CLIENT_SECRET 和机器人 Stream 模式权限。"
+        )

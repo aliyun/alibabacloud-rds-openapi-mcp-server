@@ -1,5 +1,6 @@
 #!/usr/bin/env python
 # -*- coding: utf-8 -*-
+import asyncio
 import json
 import os
 import time
@@ -139,10 +140,43 @@ class ChatMessagesStopParams(open_api_util_models.Params):
         self.method = 'POST'
 
 
+class GetConversationsParams(open_api_util_models.Params):
+    def __init__(self):
+        super().__init__()
+        self.action = 'GetConversations'
+        self.version = '2025-05-07'
+        self.protocol = 'HTTPS'
+        self.method = 'POST'
+
+
+class ListCustomAgentParams(open_api_util_models.Params):
+    def __init__(self):
+        super().__init__()
+        self.action = 'ListCustomAgent'
+        self.version = '2025-05-07'
+        self.protocol = 'HTTPS'
+        self.method = 'POST'
+
+
+class ListSkillParams(open_api_util_models.Params):
+    def __init__(self):
+        super().__init__()
+        self.action = 'ListSkill'
+        self.version = '2025-05-07'
+        self.protocol = 'HTTPS'
+        self.method = 'POST'
+
+
 class BaseEvent:
     def __init__(self, task_id, conversion_id):
         self.task_id = task_id
         self.conversion_id = conversion_id
+
+
+class StreamProgressEvent(BaseEvent):
+    def __init__(self, task_id, conversion_id, event_type):
+        super().__init__(task_id, conversion_id)
+        self.event_type = event_type
 
 
 class MessageEvent(BaseEvent):
@@ -287,7 +321,105 @@ class RdsCopilot:
             RuntimeOptions()
         )
 
-    def chat(self, query, conversion_id='', trace_id=''):
+    @staticmethod
+    def _response_body(response):
+        if response is None:
+            return {}
+        if isinstance(response, dict):
+            body = response.get("body")
+            if isinstance(body, dict):
+                return body
+            if isinstance(body, bytes):
+                body = body.decode("utf-8", errors="replace")
+            if isinstance(body, str):
+                try:
+                    parsed_body = json.loads(body)
+                except json.JSONDecodeError:
+                    return response
+                return parsed_body if isinstance(parsed_body, dict) else response
+            return response
+        body = getattr(response, "body", None)
+        if isinstance(body, dict):
+            return body
+        if body is not None and hasattr(body, "to_map"):
+            return body.to_map()
+        if hasattr(response, "to_map"):
+            mapped = response.to_map()
+            if isinstance(mapped, dict):
+                return mapped.get("body") or mapped
+        return {}
+
+    @staticmethod
+    def _is_conversations_response(body):
+        return isinstance(body, dict) and any(key in body for key in ("Data", "HasMore", "Limit", "RequestId"))
+
+    def list_conversations(self, last_id='', limit=10, pinned='', sort_by='CreatedAt'):
+        query_params = {
+            'Limit': str(limit),
+        }
+        if last_id:
+            query_params['LastId'] = last_id
+        if pinned != '':
+            query_params['Pinned'] = str(pinned).lower() if isinstance(pinned, bool) else str(pinned)
+        if sort_by:
+            query_params['SortBy'] = sort_by
+        request = open_api_util_models.OpenApiRequest(query=query_params)
+        response = self.client.do_request(
+            GetConversationsParams(),
+            request,
+            RuntimeOptions()
+        )
+        body = self._response_body(response)
+        if sort_by and not self._is_conversations_response(body):
+            fallback_query_params = dict(query_params)
+            fallback_query_params.pop('SortBy', None)
+            logger.warning("GetConversations returned unexpected body with SortBy={}; retrying without SortBy", sort_by)
+            fallback_request = open_api_util_models.OpenApiRequest(query=fallback_query_params)
+            fallback_response = self.client.do_request(
+                GetConversationsParams(),
+                fallback_request,
+                RuntimeOptions()
+            )
+            return self._response_body(fallback_response)
+        return body
+
+    def list_custom_agents(self, page_number=1, page_size=20):
+        query_params = {
+            'PageNumber': str(page_number),
+            'PageSize': str(page_size),
+        }
+        request = open_api_util_models.OpenApiRequest(query=query_params)
+        response = self.client.do_request(
+            ListCustomAgentParams(),
+            request,
+            RuntimeOptions()
+        )
+        return self._response_body(response)
+
+    def list_skills(self, page_number=1, page_size=20, language='zh-CN'):
+        query_params = {
+            'PageNumber': str(page_number),
+            'PageSize': str(page_size),
+            'Language': language or 'zh-CN',
+        }
+        request = open_api_util_models.OpenApiRequest(query=query_params)
+        response = self.client.do_request(
+            ListSkillParams(),
+            request,
+            RuntimeOptions()
+        )
+        return self._response_body(response)
+
+    async def chat_async(
+        self,
+        query,
+        conversion_id='',
+        trace_id='',
+        custom_agent_id='',
+        language='zh-CN',
+        timezone='Asia/Shanghai',
+        include_progress_events=False,
+    ):
         """流式对话，使用 EventMode=separate：message / tool_call / doc 等各自独立事件，便于渲染与推送。
         
         Args:
@@ -319,15 +451,25 @@ class RdsCopilot:
                 'ApiId': self.app_id,
                 'EventMode': 'separate',
             }
+            inputs = {}
+            if language:
+                inputs['Language'] = language
+            if timezone:
+                inputs['Timezone'] = timezone
+            if inputs:
+                query_params['Inputs'] = json.dumps(inputs, ensure_ascii=False)
+            if custom_agent_id:
+                query_params['CustomAgentId'] = custom_agent_id
             logger.info(
                 f"[trace_id={trace}] rds_sse_start, endpoint={self.endpoint}, api_id={self.app_id}, "
-                f"conversation_id={conversion_id or ''}, query_length={len(query or '')}"
+                f"conversation_id={conversion_id or ''}, custom_agent_id={custom_agent_id or ''}, "
+                f"language={language or ''}, timezone={timezone or ''}, query_length={len(query or '')}"
             )
             chat_message_params = ChatMessageParams()
             chat_message_request = open_api_util_models.OpenApiRequest(query=query_params)
-            responses = self.client.call_sseapi(chat_message_params, chat_message_request, RuntimeOptions())
+            responses = self.client.call_sseapi_async(chat_message_params, chat_message_request, RuntimeOptions())
 
-            for response in responses:
+            async for response in responses:
                 total_sse_event_count += 1
                 if first_event_at is None:
                     first_event_at = time.monotonic()
@@ -368,6 +510,8 @@ class RdsCopilot:
                     f"answer_preview={self._preview(response_body.get('Answer') or response_body.get('answer') or '')}, "
                     f"keys={list(response_body.keys())}"
                 )
+                if include_progress_events:
+                    yield StreamProgressEvent(task_id, final_conversion_id, event_type)
 
                 if event_type == 'message':
                     if response_body.get('Answer'):
@@ -439,5 +583,35 @@ class RdsCopilot:
                 f"conversation_id={final_conversion_id}, api_id={self.app_id}"
             )
         
-        # 生成器结束时返回最终的 conversion_id
-        return final_conversion_id
+        return
+
+    def chat(
+        self,
+        query,
+        conversion_id='',
+        trace_id='',
+        custom_agent_id='',
+        language='zh-CN',
+        timezone='Asia/Shanghai',
+        include_progress_events=False,
+    ):
+        async_events = self.chat_async(
+            query,
+            conversion_id,
+            trace_id=trace_id,
+            custom_agent_id=custom_agent_id,
+            language=language,
+            timezone=timezone,
+            include_progress_events=include_progress_events,
+        )
+        loop = asyncio.new_event_loop()
+        try:
+            while True:
+                try:
+                    event = loop.run_until_complete(async_events.__anext__())
+                except StopAsyncIteration:
+                    break
+                yield event
+        finally:
+            loop.run_until_complete(async_events.aclose())
+            loop.close()
