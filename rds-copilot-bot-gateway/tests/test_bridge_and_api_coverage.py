@@ -1940,7 +1940,8 @@ class WeComBridgeCoverageTest(unittest.IsolatedAsyncioTestCase):
                 source=bot_core.SessionSource("wecom", "room-1", "group", "user-1"),
             )
         )
-        self.assertEqual(proactive[-1]["body"]["markdown"]["content"], "<@user-1>\ngroup hello")
+        self.assertEqual(proactive[-1]["body"]["markdown"]["content"], "group hello")
+        self.assertNotIn("<@user-1>", proactive[-1]["body"]["markdown"]["content"])
 
         registry = bot_core.ActiveConversationRegistry()
         source = bot_core.SessionSource("wecom", "chat-1", "dm", "user-1")

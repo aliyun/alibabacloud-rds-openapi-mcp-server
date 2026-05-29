@@ -107,15 +107,6 @@ def source_from_wecom_body(body: dict[str, Any]) -> SessionSource:
     )
 
 
-def _with_wecom_group_mention(content: str, source: Optional[SessionSource]) -> str:
-    if not source or (source.chat_type or "").lower() != "group" or not source.user_id:
-        return content
-    mention = f"<@{source.user_id}>"
-    if content.startswith(mention):
-        return content
-    return f"{mention}\n{content}"
-
-
 class WeComBridge:
     def __init__(
         self,
@@ -442,7 +433,6 @@ class WeComBridge:
         source: Optional[SessionSource] = None,
     ) -> bool:
         message_text = (content or "").strip() or build_no_message_content()
-        message_text = _with_wecom_group_mention(message_text, source)
         body = {"msgtype": "markdown", "markdown": {"content": message_text[:MAX_WECOM_TEXT_LENGTH]}}
         if reply_req_id:
             frame = {"cmd": APP_CMD_RESPONSE, "headers": {"req_id": reply_req_id}, "body": body}
