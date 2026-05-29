@@ -158,9 +158,10 @@ def extract_session_webhook(callback_data: Any, incoming_message: Any = None) ->
 
 
 def _is_dingtalk_group_message(incoming_message: Any) -> bool:
-    conversation_id = str(getattr(incoming_message, "conversation_id", "") or "")
-    sender_id = str(getattr(incoming_message, "sender_id", "") or "")
-    return bool(conversation_id and sender_id and conversation_id != sender_id)
+    conversation_type = str(getattr(incoming_message, "conversation_type", "") or "").strip().lower()
+    if conversation_type:
+        return conversation_type in {"2", "group", "groupchat"}
+    return bool(getattr(incoming_message, "is_in_at_list", False))
 
 
 def _dingtalk_group_mention_user_id(incoming_message: Any) -> str:
@@ -686,7 +687,7 @@ class CardBotHandler(dingtalk_stream.ChatbotHandler):
         source = SessionSource(
             platform="dingtalk",
             chat_id=dingtalk_conversation_id or sender_id,
-            chat_type="group" if dingtalk_conversation_id and dingtalk_conversation_id != sender_id else "dm",
+            chat_type="group" if _is_dingtalk_group_message(incoming_message) else "dm",
             user_id=sender_id,
             user_name=getattr(incoming_message, "sender_nick", "") or getattr(incoming_message, "sender_name", "") or "",
             user_id_alt=getattr(incoming_message, "sender_staff_id", "") or "",
@@ -700,7 +701,8 @@ class CardBotHandler(dingtalk_stream.ChatbotHandler):
         self.logger.info(
             f"[trace_id={trace_id}] DingTalk message metadata: "
             f"chat_id={source.chat_id}, chat_type={source.chat_type}, sender_id={source.user_id}, "
-            f"sender_staff_id={source.user_id_alt}, is_in_at_list={is_in_at_list}, "
+            f"sender_staff_id={source.user_id_alt}, conversation_type={getattr(incoming_message, 'conversation_type', '')}, "
+            f"is_in_at_list={is_in_at_list}, "
             f"session_webhook_present={bool(session_webhook)}, query_length={len(query_text)}"
         )
         if not pre_filter_allowed or not authorized:

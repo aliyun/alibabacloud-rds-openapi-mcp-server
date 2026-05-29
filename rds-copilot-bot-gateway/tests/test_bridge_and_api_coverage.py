@@ -92,12 +92,14 @@ class FakeIncomingMessage:
         *,
         conversation_id="ding-conv-1",
         sender_id="sender-1",
+        conversation_type="2",
         message_id="msg-1",
         message_type="text",
     ):
         self.text = FakeText(content)
         self.conversation_id = conversation_id
         self.sender_id = sender_id
+        self.conversation_type = conversation_type
         self.message_id = message_id
         self.message_type = message_type
         self.robot_code = "robot-code-1"
@@ -1470,6 +1472,28 @@ class FeishuBridgeCoverageTest(unittest.IsolatedAsyncioTestCase):
         self.assertEqual(group_markdown_payload["zh_cn"]["content"][1][0]["tag"], "md")
         self.assertIn("### Agents", group_markdown_payload["zh_cn"]["content"][1][0]["text"])
 
+        dm_source = bot_core.SessionSource("feishu", "chat", "dm", "ou_user_1", user_name="Alice")
+        self.assertTrue(
+            await bridge.send_text(
+                "chat",
+                "dm hello",
+                reply_to_message_id="msg-dm",
+                source=dm_source,
+            )
+        )
+        dm_payload = json.loads(message_api.reply_calls[-1].request_body.content)
+        self.assertEqual(dm_payload["text"], "dm hello")
+        self.assertTrue(
+            await bridge.send_text(
+                "chat",
+                "### Agents\n- `agent-1` test",
+                reply_to_message_id="msg-dm-md",
+                source=dm_source,
+            )
+        )
+        dm_markdown_payload = json.loads(message_api.reply_calls[-1].request_body.content)
+        self.assertEqual(dm_markdown_payload["zh_cn"]["content"][0][0]["tag"], "md")
+
         message_api.reply_response = Response(False)
         self.assertFalse(await bridge.send_text("chat", "hello", reply_to_message_id="msg-2"))
         message_api.reply = Mock(side_effect=RuntimeError("send failed"))
@@ -1901,6 +1925,14 @@ class WeComBridgeCoverageTest(unittest.IsolatedAsyncioTestCase):
         bridge._send_frame = AsyncMock(side_effect=lambda frame: proactive.append(frame) or True)
         self.assertTrue(await bridge.send_text("chat-1", "hello"))
         self.assertEqual(proactive[-1]["cmd"], "aibot_send_msg")
+        self.assertTrue(
+            await bridge.send_text(
+                "chat-1",
+                "dm hello",
+                source=bot_core.SessionSource("wecom", "chat-1", "dm", "user-1"),
+            )
+        )
+        self.assertEqual(proactive[-1]["body"]["markdown"]["content"], "dm hello")
         self.assertTrue(
             await bridge.send_text(
                 "room-1",
@@ -2552,6 +2584,29 @@ class DingTalkBridgeCoverageTest(unittest.IsolatedAsyncioTestCase):
         self.assertEqual(posted["payload"]["at"], {"atUserIds": ["staff-1"], "isAtAll": False})
         self.assertEqual(posted["payload"]["markdown"]["text"], "@staff-1\ngroup hello")
 
+        single_message = FakeIncomingMessage(
+            "/help",
+            conversation_id="ding-single-conv-1",
+            sender_id="sender-1",
+            conversation_type="1",
+        )
+        self.assertFalse(dingtalk_bridge._is_dingtalk_group_message(single_message))
+        self.assertEqual(dingtalk_bridge._dingtalk_group_mention_user_id(single_message), "")
+        self.assertEqual(
+            dingtalk_bridge._with_dingtalk_group_mention("single hello", dingtalk_bridge._dingtalk_group_mention_user_id(single_message)),
+            "single hello",
+        )
+        with patch("bridges.dingtalk.asyncio.to_thread", new=fake_to_thread):
+            self.assertTrue(
+                await dingtalk_bridge.send_dingtalk_session_webhook(
+                    "https://hook",
+                    "single hello",
+                    mention_user_id=dingtalk_bridge._dingtalk_group_mention_user_id(single_message),
+                )
+            )
+        self.assertNotIn("at", posted["payload"])
+        self.assertEqual(posted["payload"]["markdown"]["text"], "single hello")
+
         with self.assertRaisesRegex(ValueError, "sessionWebhook"):
             await dingtalk_bridge.send_dingtalk_session_webhook("", "content")
 
@@ -2737,6 +2792,24 @@ class DingTalkBridgeCoverageTest(unittest.IsolatedAsyncioTestCase):
         with patch("bridges.dingtalk.send_dingtalk_session_webhook", new=AsyncMock(side_effect=RuntimeError("webhook failed"))):
             await handler.reply_command_content("### Help", command_message, {"sessionWebhook": "https://hook"})
         handler.reply_text.assert_called_once_with("@staff-1\n### Help", command_message)
+
+        handler = dingtalk_bridge.CardBotHandler(logger=Mock())
+        handler.reply_text = Mock()
+        single_command_message = FakeIncomingMessage(
+            "/help",
+            conversation_id="ding-single-conv-1",
+            sender_id="sender-1",
+            conversation_type="1",
+        )
+        single_command_message.session_webhook = "https://hook"
+        with tempfile.TemporaryDirectory() as tmp_dir, \
+            patch.dict(os.environ, {"RDS_COPILOT_CONVERSATION_STORE_FILE": os.path.join(tmp_dir, "conversations.json"), "GATEWAY_ALLOW_ALL_USERS": "true"}), \
+            patch("bridges.dingtalk.dingtalk_stream.ChatbotMessage.from_dict", return_value=single_command_message), \
+            patch("bridges.dingtalk.send_dingtalk_session_webhook", new=AsyncMock(return_value=True)) as send_webhook:
+            self.assertEqual(await handler.process(callback), (dingtalk_bridge.AckMessage.STATUS_OK, "OK"))
+        send_webhook.assert_awaited_once()
+        self.assertEqual(send_webhook.await_args.kwargs["mention_user_id"], "")
+        handler.reply_text.assert_not_called()
 
         with tempfile.TemporaryDirectory() as tmp_dir:
             store_path = os.path.join(tmp_dir, "conversations.json")

@@ -18,10 +18,11 @@ class FakeText:
 
 
 class FakeIncomingMessage:
-    def __init__(self, content="hello", conversation_id="ding-conv-1", sender_id="sender-1"):
+    def __init__(self, content="hello", conversation_id="ding-conv-1", sender_id="sender-1", conversation_type="2"):
         self.text = FakeText(content)
         self.conversation_id = conversation_id
         self.sender_id = sender_id
+        self.conversation_type = conversation_type
         self.sender_staff_id = "staff-1"
         self.message_id = "msg-1"
         self.message_type = "text"
