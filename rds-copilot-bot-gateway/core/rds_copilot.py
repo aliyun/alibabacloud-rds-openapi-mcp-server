@@ -121,6 +121,8 @@ markdown_code_languages = [
     "ascii",
 ]
 
+PAYLOAD_LOG_ENV = "RDS_COPILOT_LOG_PAYLOADS"
+
 
 class ChatMessageParams(open_api_util_models.Params):
     def __init__(self):
@@ -295,6 +297,10 @@ class RdsCopilot:
             'head': cls._preview(raw_text[:limit], limit=limit),
             'tail': cls._preview(raw_text[-limit:], limit=limit),
         }
+
+    @staticmethod
+    def _payload_logging_enabled():
+        return os.getenv(PAYLOAD_LOG_ENV, "").strip().lower() in {"1", "true", "yes", "on"}
 
     def _emit_tool_call_event(self, task_id, conversion_id, payload):
         """根据 tool_call 事件的 status 返回对应事件类型（EventMode=separate 时 payload 为单条事件体）"""
@@ -479,20 +485,24 @@ class RdsCopilot:
                     )
 
                 raw_data = response.event.data
-                logger.info(
-                    f"[trace_id={trace}] rds_sse_raw_event, "
-                    f"seq={total_sse_event_count}, raw={self._preview_raw_sse_data(raw_data)}"
-                )
+                if self._payload_logging_enabled():
+                    logger.debug(
+                        f"[trace_id={trace}] rds_sse_raw_event, "
+                        f"seq={total_sse_event_count}, raw={self._preview_raw_sse_data(raw_data)}"
+                    )
                 try:
                     response_body = json.loads(raw_data)
                 except (json.JSONDecodeError, TypeError) as e:
                     malformed_event_count += 1
                     raw_edge = self._raw_sse_edge_preview(raw_data)
+                    if self._payload_logging_enabled():
+                        logger.debug(
+                            f"[trace_id={trace}] rds_sse_malformed_event_payload, "
+                            f"seq={total_sse_event_count}, raw_head={raw_edge['head']}, raw_tail={raw_edge['tail']}"
+                        )
                     logger.warning(
                         f"[trace_id={trace}] rds_sse_malformed_event, "
-                        f"seq={total_sse_event_count}, error={e}, "
-                        f"raw_length={raw_edge['length']}, "
-                        f"raw_head={raw_edge['head']}, raw_tail={raw_edge['tail']}"
+                        f"seq={total_sse_event_count}, error={e}, raw_length={raw_edge['length']}"
                     )
                     continue
                 if 'TaskId' in response_body:
@@ -503,11 +513,13 @@ class RdsCopilot:
                     final_conversion_id = response_body['ConversionId']
 
                 event_type = (response_body.get('Event') or response_body.get('event') or '').strip().lower()
+                answer_value = response_body.get('Answer') or response_body.get('answer') or ''
+                answer_length = len(str(answer_value or ''))
                 logger.info(
                     f"[trace_id={trace}] rds_sse_event, "
                     f"seq={total_sse_event_count}, event_type={event_type or 'EMPTY'}, "
                     f"conversation_id={final_conversion_id}, task_id={task_id}, "
-                    f"answer_preview={self._preview(response_body.get('Answer') or response_body.get('answer') or '')}, "
+                    f"answer_length={answer_length}, "
                     f"keys={list(response_body.keys())}"
                 )
                 if include_progress_events:
@@ -521,7 +533,7 @@ class RdsCopilot:
                             logger.info(
                                 f"[trace_id={trace}] rds_first_message, "
                                 f"first_message_cost={first_message_at - start_at:.2f}s, "
-                                f"message_preview={self._preview(response_body['Answer'])}"
+                                f"message_length={len(str(response_body['Answer']))}"
                             )
                         yield MessageEvent(task_id, final_conversion_id, response_body['Answer'])
 

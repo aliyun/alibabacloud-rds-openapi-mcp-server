@@ -299,7 +299,7 @@ async def _run_dingtalk_mock_query(query: str, store_path: str, copilot_factory:
     handler.reply_text = lambda text, message: replies.append(text)
     handler.reply_markdown = lambda title, text, message: replies.append(text) or {"ok": True}
 
-    async def fake_send_webhook(session_webhook: str, content: str, *, trace_id: str = ""):
+    async def fake_send_webhook(session_webhook: str, content: str, *, trace_id: str = "", mention_user_id: str = ""):
         webhook_messages.append(content)
         return True
 
@@ -383,12 +383,13 @@ async def _run_wecom_mock_query(query: str, store_path: str, copilot_factory: Ca
 
 async def _run_qq_mock_query(query: str, store_path: str, copilot_factory: Callable[[], RdsCopilot]) -> list[str]:
     bodies = []
-    bridge = QQBridge(
-        app_id="mock-qq-app",
-        client_secret="mock-qq-secret",
-        store=bot_core.CopilotConversationStore(store_path),
-        copilot_factory=copilot_factory,
-    )
+    with patch.dict(os.environ, {"QQ_HTTP_VERIFY": "true"}):
+        bridge = QQBridge(
+            app_id="mock-qq-app",
+            client_secret="mock-qq-secret",
+            store=bot_core.CopilotConversationStore(store_path),
+            copilot_factory=copilot_factory,
+        )
     bridge._api_request = AsyncMock(side_effect=lambda method, path, body=None: bodies.append(body or {}) or {"id": "mock-qq-sent"})
     event = {
         "id": "mock-qq-message",

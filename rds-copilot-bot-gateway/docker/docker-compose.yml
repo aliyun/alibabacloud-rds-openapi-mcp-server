@@ -1,0 +1,15 @@
+services:
+  rds-copilot-bot-gateway:
+    image: rds-copilot-bot-gateway:latest
+    build:
+      context: ..
+      dockerfile: docker/Dockerfile
+    container_name: rds-copilot-bot-gateway
+    restart: unless-stopped
+    env_file:
+      - .env
+    environment:
+      RDS_COPILOT_LOG_FILE: /data/rds-copilot.log
+      RDS_COPILOT_CONVERSATION_STORE_FILE: /data/copilot_conversations.json
+    volumes:
+      - ./data:/data

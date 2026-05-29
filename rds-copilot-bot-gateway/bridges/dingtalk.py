@@ -83,9 +83,9 @@ def convert_json_values_to_string(obj: dict) -> dict:
     return result
 
 
-def build_error_card_content(error: Exception, language: str = bot_core.DEFAULT_LANGUAGE) -> str:
+def build_error_card_content(error: Exception, language: str = bot_core.DEFAULT_LANGUAGE, trace_id: str = "") -> str:
     """Build user-visible localized error content for failed Copilot calls."""
-    return bot_core.build_error_content(error, language=language)
+    return bot_core.build_error_content(error, language=language, trace_id=trace_id)
 
 
 def build_no_message_card_content(language: str = bot_core.DEFAULT_LANGUAGE) -> str:
@@ -494,7 +494,7 @@ async def handle_reply_plain_message(
                 f"[trace_id={trace_id}] no message returned from RDS AI in plain mode"
             )
     except Exception as e:
-        final_display_content = build_error_card_content(e, language)
+        final_display_content = build_error_card_content(e, language, trace_id=trace_id)
         self.logger.exception(f"[trace_id={trace_id}] handle plain reply failed: {e}")
 
     session_webhook = extract_session_webhook(callback_data, incoming_message)
@@ -525,6 +525,7 @@ async def handle_reply_and_update_card(
     timezone: str = bot_core.DEFAULT_TIMEZONE,
     active_state=None,
 ):
+    trace_id = incoming_message.message_id or ""
     # 卡片模板 ID
     card_template_id = "b22243cf-3171-4097-8c2c-43c3706ef8af.schema"
     
@@ -599,8 +600,8 @@ async def handle_reply_and_update_card(
                 final_display_content = build_no_message_card_content(language)
                 self.logger.warning("RDS AI finished without response content.")
     except Exception as e:
-        final_display_content = build_error_card_content(e, language)
-        self.logger.exception(f"Failed to handle RDS AI card response: {e}")
+        final_display_content = build_error_card_content(e, language, trace_id=trace_id)
+        self.logger.exception(f"[trace_id={trace_id}] Failed to handle RDS AI card response: {e}")
         try:
             await update_card_callback({"content": final_display_content, "preparations": []})
         except Exception as update_error:
@@ -672,16 +673,11 @@ class CardBotHandler(dingtalk_stream.ChatbotHandler):
 
     async def process(self, callback: dingtalk_stream.CallbackMessage):
         incoming_message = dingtalk_stream.ChatbotMessage.from_dict(callback.data)
-        self.logger.info(f"收到消息：{incoming_message}")
-
-        if incoming_message.message_type != "text":
-            _reply_text_with_dingtalk_group_mention(self, "I can only process text messages.", incoming_message)
-            return AckMessage.STATUS_OK, "OK"
 
         store = get_copilot_conversation_store()
         dingtalk_conversation_id = incoming_message.conversation_id
         sender_id = incoming_message.sender_id
-        query_text = incoming_message.text.content.strip()
+        query_text = str(getattr(getattr(incoming_message, "text", None), "content", "") or "").strip()
         session_webhook = extract_session_webhook(callback.data, incoming_message)
         trace_id = incoming_message.message_id or ""
         source = SessionSource(
@@ -711,6 +707,10 @@ class CardBotHandler(dingtalk_stream.ChatbotHandler):
                 f"chat_id={source.chat_id}, sender_id={source.user_id}, "
                 f"pre_filter_allowed={pre_filter_allowed}, authorized={authorized}"
             )
+            return AckMessage.STATUS_OK, "OK"
+
+        if incoming_message.message_type != "text":
+            _reply_text_with_dingtalk_group_mention(self, "I can only process text messages.", incoming_message)
             return AckMessage.STATUS_OK, "OK"
         context = BotContext("dingtalk", dingtalk_conversation_id, sender_id, store)
 

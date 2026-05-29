@@ -60,6 +60,20 @@ def _read_bool_env(name: str, default: bool = True) -> bool:
     return raw_value.strip().lower() not in {"0", "false", "no", "off"}
 
 
+def _dev_tls_override_allowed() -> bool:
+    return os.getenv("RDS_BOT_ENV", "").strip().lower() in {"dev", "development", "local", "test", "testing"}
+
+
+def _read_qq_tls_verify() -> bool:
+    tls_verify = _read_bool_env("QQ_HTTP_VERIFY", True)
+    if not tls_verify and not _dev_tls_override_allowed():
+        raise RuntimeError(
+            "QQ_HTTP_VERIFY=false 只允许在本地调试环境使用；"
+            "如确需关闭证书校验，请同时设置 RDS_BOT_ENV=dev。"
+        )
+    return tls_verify
+
+
 def _read_positive_float_env(name: str, default: float) -> float:
     try:
         value = float(os.getenv(name, str(default)))
@@ -137,7 +151,7 @@ class QQBridge:
         self.session_id = ""
         self._heartbeat_task = None
         self._heartbeat_ack_received = True
-        self.tls_verify = _read_bool_env("QQ_HTTP_VERIFY", True)
+        self.tls_verify = _read_qq_tls_verify()
 
     async def start_forever(self):  # pragma: no cover - real WebSocket loop is covered by integration smoke tests
         if not AIOHTTP_AVAILABLE or not HTTPX_AVAILABLE:
@@ -423,7 +437,7 @@ class QQBridge:
             await self.send_text(source, final_content)
         except Exception as e:
             logger.exception("QQ Copilot reply failed: {}", e)
-            await self.send_text(source, build_error_content(e, language))
+            await self.send_text(source, build_error_content(e, language, trace_id=source.thread_id))
         finally:
             notifier_task.cancel()
             with contextlib.suppress(asyncio.CancelledError):

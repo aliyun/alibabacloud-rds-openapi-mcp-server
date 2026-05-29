@@ -4,26 +4,52 @@
 
 > 仅 RDS AI 助手专业版支持机器人接入。配置前请先开通 RDS AI 助手专业版，并准备好阿里云 AccessKey。
 
-## 快速开始
+## 选择启动方式
+
+推荐使用 Docker 部署；如果要在本机开发调试，也可以直接用 Python 启动。两种方式使用同一组环境变量，只是 `.env` 文件位置不同：
+
+| 启动方式 | `.env` 位置 | 日志和会话状态 |
+|---|---|---|
+| Docker | `rds-copilot-bot-gateway/docker/.env` | `rds-copilot-bot-gateway/docker/data/` |
+| 本地 Python | `rds-copilot-bot-gateway/.env` | 当前运行目录，或由环境变量指定 |
+
+下面各 IM 平台章节里的配置片段，写入你选择的 `.env` 文件即可。
+
+### Docker 启动
+
+```bash
+cd rds-copilot-bot-gateway/docker
+# 在当前目录创建 .env，并填入下面的通用配置和平台配置
+# 如果已经有本地 Python 启动用的 .env，也可以执行：cp ../.env .env
+docker build -t rds-copilot-bot-gateway:latest -f Dockerfile ..
+docker compose up -d
+```
+
+查看日志：
+
+```bash
+docker compose logs -f
+tail -f data/rds-copilot.log
+```
+
+### 本地 Python 启动
 
 ```bash
 cd rds-copilot-bot-gateway
 python3 -m venv venv
 source venv/bin/activate
 pip install -r requirements.txt
-```
-
-在 `rds-copilot-bot-gateway/.env` 写入阿里云 AK/SK 和要启用的平台配置。`main.py` 启动时会自动加载当前运行目录的 `.env` 文件。
-
-```bash
 python main.py
 ```
 
-同时启动多个平台：
+### 同时启动多个平台
 
-```bash
-RDS_BOT_BRIDGES=dingtalk,feishu python main.py
-RDS_BOT_BRIDGES=all python main.py
+同时启动多个平台时，在 `.env` 中设置：
+
+```dotenv
+RDS_BOT_BRIDGES=dingtalk,feishu
+# 或启动全部平台
+RDS_BOT_BRIDGES=all
 ```
 
 ## 通用环境变量
@@ -39,6 +65,8 @@ RDS_BOT_BRIDGES=all python main.py
 | `RDS_COPILOT_CHAT_WORKERS` | 否 | RDS AI 流式请求线程池大小，默认 `8`。 |
 | `RDS_BRIDGE_RESTART_BASE_SECONDS` | 否 | bridge 异常退出后的重启退避起始时间，默认 `3` 秒。 |
 | `RDS_BRIDGE_RESTART_MAX_SECONDS` | 否 | bridge 异常退出后的最大重启退避时间，默认 `60` 秒。 |
+| `RDS_BOT_ENV` | 否 | 运行环境标识；本地调试可设为 `dev`。 |
+| `RDS_COPILOT_LOG_PAYLOADS` | 否 | 是否记录 RDS AI 原始流式 payload，默认不记录；仅建议本地排查时临时开启。 |
 
 **安全控制默认拒绝未授权用户**。可以配置对应平台的 `*_ALLOWED_USERS` 做访问控制；如果希望机器人对所有用户开放，可设置 `*_ALLOW_ALL_USERS=true` 或 `GATEWAY_ALLOW_ALL_USERS=true`。
 
@@ -51,8 +79,9 @@ RDS_BOT_BRIDGES=all python main.py
 
 在 [钉钉开放平台](https://open.dingtalk.com/) 创建应用并添加机器人，消息接收模式选择 Stream 模式。应用权限至少开通：企业内机器人发送消息权限、互动卡片实例写权限、AI 卡片流式更新权限。
 
-```bash
-cat > .env <<'EOF'
+`.env` 示例：
+
+```dotenv
 RDS_BOT_BRIDGES=dingtalk
 ACCESS_KEY_ID=your-alibaba-cloud-access-key-id
 ACCESS_SECRET=your-alibaba-cloud-access-key-secret
@@ -61,9 +90,6 @@ DINGTALK_APP_CLIENT_ID=your-dingtalk-client-id
 DINGTALK_APP_CLIENT_SECRET=your-dingtalk-client-secret
 DINGTALK_ALLOWED_USERS=sender-id-1,sender-staff-id-2
 # 如需允许所有钉钉用户访问：DINGTALK_ALLOW_ALL_USERS=true
-EOF
-
-python main.py
 ```
 
 | 变量名 | 必选 | 说明 |
@@ -80,10 +106,11 @@ python main.py
 
 ## 飞书
 
-在 [飞书开放平台](https://open.feishu.cn/) 创建应用，启用机器人能力，并订阅 `im.message.receive_v1` 事件。当前只考虑长连接模式。
+在 [飞书开放平台](https://open.feishu.cn/) 创建应用，启用机器人能力，并订阅 `im.message.receive_v1` 事件。支持长连接模式。
 
-```bash
-cat > .env <<'EOF'
+`.env` 示例：
+
+```dotenv
 RDS_BOT_BRIDGES=feishu
 ACCESS_KEY_ID=your-alibaba-cloud-access-key-id
 ACCESS_SECRET=your-alibaba-cloud-access-key-secret
@@ -93,9 +120,6 @@ FEISHU_APP_SECRET=your-feishu-app-secret
 FEISHU_ALLOWED_USERS=open-id-1,union-id-2
 # 如需允许所有飞书用户访问：FEISHU_ALLOW_ALL_USERS=true
 # 国际版 Lark 可设置：FEISHU_DOMAIN=lark
-EOF
-
-python main.py
 ```
 
 | 变量名 | 必选 | 说明 |
@@ -114,10 +138,11 @@ python main.py
 
 ## 企业微信 WeCom AI Bot
 
-在 [企业微信管理后台](https://work.weixin.qq.com/wework_admin/frame#/apps) 安全与管理 -> 管理工具 -> 智能机器人 里面创建或配置智能机器人，获取 Bot ID 和 Secret。当前支持 WeCom AI Bot WebSocket 长连接模式。
+在 [企业微信管理后台](https://work.weixin.qq.com/wework_admin/frame#/apps) 安全与管理 -> 管理工具 -> 智能机器人 里面创建或配置智能机器人，获取 Bot ID 和 Secret。支持 WeCom AI Bot WebSocket 长连接模式。
 
-```bash
-cat > .env <<'EOF'
+`.env` 示例：
+
+```dotenv
 RDS_BOT_BRIDGES=wecom
 ACCESS_KEY_ID=your-alibaba-cloud-access-key-id
 ACCESS_SECRET=your-alibaba-cloud-access-key-secret
@@ -126,9 +151,6 @@ WECOM_BOT_ID=your-wecom-ai-bot-id
 WECOM_SECRET=your-wecom-ai-bot-secret
 WECOM_ALLOWED_USERS=wecom-userid-1,wecom-userid-2
 # 如需允许所有企业微信用户访问：WECOM_ALLOW_ALL_USERS=true
-EOF
-
-python main.py
 ```
 
 | 变量名 | 必选 | 说明 |
@@ -149,8 +171,9 @@ python main.py
 
 在 [QQ 机器人开放平台](https://bot.q.qq.com/) 创建机器人，获取 AppID 和 Client Secret。接口和网关能力参考 [QQ Bot API v2 文档](https://bot.q.qq.com/wiki/develop/api-v2/)。
 
-```bash
-cat > .env <<'EOF'
+`.env` 示例：
+
+```dotenv
 RDS_BOT_BRIDGES=qqbot
 ACCESS_KEY_ID=your-alibaba-cloud-access-key-id
 ACCESS_SECRET=your-alibaba-cloud-access-key-secret
@@ -159,9 +182,6 @@ QQ_APP_ID=your-qq-bot-app-id
 QQ_CLIENT_SECRET=your-qq-bot-client-secret
 QQ_ALLOWED_USERS=user-openid-1,user-openid-2
 # 如需允许所有 QQ 用户访问：QQ_ALLOW_ALL_USERS=true
-EOF
-
-python main.py
 ```
 
 | 变量名 | 必选 | 说明 |
@@ -173,7 +193,7 @@ python main.py
 | `QQ_GROUP_ALLOWED_USERS` | 否 | 允许访问的 QQ 群 OpenID，多个用逗号分隔。 |
 | `QQ_RECONNECT_BASE_SECONDS` | 否 | QQ Bot 网关断线重连退避起始时间，默认 `3` 秒。 |
 | `QQ_RECONNECT_MAX_SECONDS` | 否 | QQ Bot 网关断线重连最大退避时间，默认 `60` 秒。 |
-| `QQ_HTTP_VERIFY` | 否 | QQ Bot HTTPS/WSS 证书校验开关，默认 `true`；本地代理证书异常时可临时设为 `false`。 |
+| `QQ_HTTP_VERIFY` | 否 | QQ Bot HTTPS/WSS 证书校验开关，默认 `true`；设为 `false` 时必须同时设置 `RDS_BOT_ENV=dev`。 |
 | `QQ_DM_POLICY` | 否 | 单聊策略，默认 `open`；支持 `open`、`disabled`。 |
 | `QQ_GROUP_POLICY` | 否 | 群聊策略，默认 `open`；支持 `open`、`disabled`。 |
 
@@ -213,6 +233,7 @@ rds-copilot-bot-gateway/
   main.py
   core/
   bridges/
+  docker/
   scripts/
   tests/
 ```

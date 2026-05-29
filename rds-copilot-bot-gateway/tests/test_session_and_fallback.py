@@ -595,7 +595,9 @@ class CardFallbackTest(unittest.IsolatedAsyncioTestCase):
         self.assertTrue(final_call["finished"])
         self.assertFalse(final_call["failed"])
         self.assertIn("RDS AI diagnosis failed", final_call["content_value"])
-        self.assertIn("ConnectionError", final_call["content_value"])
+        self.assertIn("msg-1", final_call["content_value"])
+        self.assertNotIn("ConnectionError", final_call["content_value"])
+        self.assertNotIn("Copilot connection reset", final_call["content_value"])
 
     async def test_no_message_response_sends_visible_english_fallback_and_finishes_card(self):
         card = FakeCardInstance()
@@ -691,7 +693,9 @@ class PlainReplyTest(unittest.IsolatedAsyncioTestCase):
         send_webhook.assert_awaited_once()
         _, args, _ = send_webhook.mock_calls[0]
         self.assertIn("RDS AI 诊断失败", args[1])
-        self.assertIn("ConnectionError", args[1])
+        self.assertIn("msg-1", args[1])
+        self.assertNotIn("ConnectionError", args[1])
+        self.assertNotIn("connection reset", args[1])
 
     async def test_plain_reply_suppresses_empty_fallback_after_stop(self):
         handler = FakeHandler()

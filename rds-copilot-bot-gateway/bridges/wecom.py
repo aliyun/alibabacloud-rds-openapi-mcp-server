@@ -414,7 +414,12 @@ class WeComBridge:
             await self.send_text(source.chat_id, final_content, reply_req_id=reply_req_id, source=source)
         except Exception as e:
             logger.exception("WeCom Copilot reply failed: {}", e)
-            await self.send_text(source.chat_id, build_error_content(e, language), reply_req_id=reply_req_id, source=source)
+            await self.send_text(
+                source.chat_id,
+                build_error_content(e, language, trace_id=message_id or reply_req_id),
+                reply_req_id=reply_req_id,
+                source=source,
+            )
         finally:
             notifier_task.cancel()
             with contextlib.suppress(asyncio.CancelledError):

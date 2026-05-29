@@ -1,4 +1,5 @@
 import asyncio
+import contextlib
 import difflib
 import inspect
 import json
@@ -280,6 +281,7 @@ I18N_MESSAGES = {
         "stopped_task": "已停止当前任务。",
         "error_failed": "RDS AI 诊断失败，未能生成完整回复。",
         "error_label": "错误",
+        "error_trace": "TraceId：`{trace_id}`",
         "error_retry": "请稍后重试，或联系服务维护者检查日志。",
         "no_message": "RDS AI 已结束，但未返回回复内容。",
         "busy": "已有任务正在运行。输入 `/btw` 查看当前回复，或输入 `/stop` 停止当前任务。",
@@ -347,6 +349,7 @@ I18N_MESSAGES = {
         "stopped_task": "已停止目前任務。",
         "error_failed": "RDS AI 診斷失敗，未能產生完整回覆。",
         "error_label": "錯誤",
+        "error_trace": "TraceId：`{trace_id}`",
         "error_retry": "請稍後重試，或聯絡服務維護者檢查日誌。",
         "no_message": "RDS AI 已結束，但未返回回覆內容。",
         "busy": "已有任務正在執行。輸入 `/btw` 查看目前回覆，或輸入 `/stop` 停止目前任務。",
@@ -414,6 +417,7 @@ I18N_MESSAGES = {
         "stopped_task": "Stopped current task.",
         "error_failed": "RDS AI diagnosis failed and could not generate a complete response.",
         "error_label": "Error",
+        "error_trace": "TraceId: `{trace_id}`",
         "error_retry": "Please try again later or contact the service maintainer to check the logs.",
         "no_message": "RDS AI finished, but no response content was returned.",
         "busy": "A task is already running. Use `/btw` to view the current response or `/stop` to stop it.",
@@ -481,6 +485,7 @@ I18N_MESSAGES = {
         "stopped_task": "現在のタスクを停止しました。",
         "error_failed": "RDS AI の診断に失敗し、完全な回答を生成できませんでした。",
         "error_label": "エラー",
+        "error_trace": "TraceId: `{trace_id}`",
         "error_retry": "しばらくしてから再試行するか、サービス管理者にログ確認を依頼してください。",
         "no_message": "RDS AI は終了しましたが、回答内容は返されませんでした。",
         "busy": "タスクはすでに実行中です。`/btw` で現在の回答を確認するか、`/stop` で停止してください。",
@@ -639,17 +644,12 @@ def is_new_conversation_command(text: str) -> bool:
     return _normalize_command_prefix(text).lower() == NEW_CONVERSATION_COMMAND
 
 
-def build_error_content(error: Exception, language: str = DEFAULT_LANGUAGE) -> str:
-    error_type = error.__class__.__name__
-    error_message = str(error).strip()
-    error_detail = f"{error_type}: {error_message}" if error_message else error_type
-    if len(error_detail) > 500:
-        error_detail = f"{error_detail[:500]}..."
-    return (
-        f"{_t(language, 'error_failed')}\n\n"
-        f"{_t(language, 'error_label')}: {error_detail}\n\n"
-        f"{_t(language, 'error_retry')}"
-    )
+def build_error_content(error: Exception, language: str = DEFAULT_LANGUAGE, trace_id: str = "") -> str:
+    lines = [str(_t(language, "error_failed"))]
+    if trace_id:
+        lines.extend(["", str(_t(language, "error_trace", trace_id=trace_id))])
+    lines.extend(["", str(_t(language, "error_retry"))])
+    return "\n".join(lines)
 
 
 def build_no_message_content(language: str = DEFAULT_LANGUAGE) -> str:
@@ -673,6 +673,7 @@ class CopilotConversationStore:
     def __init__(self, file_path: str):
         self.file_path = file_path
         self._lock = _get_store_lock(file_path)
+        self._harden_file_permissions()
 
     @staticmethod
     def _key(conversation_id: str, sender_id: str, platform: str = "") -> str:
@@ -686,9 +687,16 @@ class CopilotConversationStore:
     def _empty_data(self) -> dict:
         return {"version": 1, "conversations": {}}
 
+    def _harden_file_permissions(self) -> None:
+        if not self.file_path or not os.path.exists(self.file_path):
+            return
+        with contextlib.suppress(OSError, AttributeError):
+            os.chmod(self.file_path, 0o600)
+
     def _load_unlocked(self) -> dict:
         if not self.file_path or not os.path.exists(self.file_path):
             return self._empty_data()
+        self._harden_file_permissions()
         try:
             with open(self.file_path, "r", encoding="utf-8") as f:
                 data = json.load(f)
@@ -709,10 +717,13 @@ class CopilotConversationStore:
         store_dir = os.path.dirname(os.path.abspath(self.file_path))
         os.makedirs(store_dir, exist_ok=True)
         tmp_file_path = f"{self.file_path}.tmp.{os.getpid()}.{threading.get_ident()}"
-        with open(tmp_file_path, "w", encoding="utf-8") as f:
+        fd = os.open(tmp_file_path, os.O_WRONLY | os.O_CREAT | os.O_TRUNC, 0o600)
+        with os.fdopen(fd, "w", encoding="utf-8") as f:
             json.dump(data, f, ensure_ascii=False, indent=2, sort_keys=True)
             f.write("\n")
         os.replace(tmp_file_path, self.file_path)
+        with contextlib.suppress(OSError, AttributeError):
+            os.chmod(self.file_path, 0o600)
 
     def _save(self, data: dict):
         with self._lock:

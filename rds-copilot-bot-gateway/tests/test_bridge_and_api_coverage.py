@@ -478,6 +478,23 @@ class RdsCopilotApiCoverageTest(unittest.TestCase):
         self.assertEqual(events[0].event_type, "workflow_started")
         self.assertIsInstance(events[2], MessageEvent)
 
+    def test_chat_does_not_log_payload_content_by_default(self):
+        sensitive_answer = "customer_password=secret-value"
+        raw_event = json.dumps({"Event": "message", "Answer": sensitive_answer, "TaskId": "task-1", "ConversationId": "conv-1"})
+        copilot = self.make_copilot(FakeSseClient([raw_event]))
+        log_messages = []
+        sink_id = rds_copilot.logger.add(lambda message: log_messages.append(str(message)), level="INFO")
+        try:
+            list(copilot.chat("query", trace_id="trace-no-payload"))
+        finally:
+            rds_copilot.logger.remove(sink_id)
+
+        joined_logs = "\n".join(log_messages)
+        self.assertIn("trace-no-payload", joined_logs)
+        self.assertNotIn(sensitive_answer, joined_logs)
+        self.assertNotIn("raw=", joined_logs)
+        self.assertNotIn("answer_preview=", joined_logs)
+
     def test_chat_raises_client_exception_after_logging_summary(self):
         copilot = self.make_copilot(FakeSseClient(error=RuntimeError("429 TooManyRequests")))
 
@@ -503,7 +520,9 @@ class BotCoreCoverageTest(unittest.IsolatedAsyncioTestCase):
 
             with open(store_path, "w", encoding="utf-8") as f:
                 f.write("{bad json")
+            os.chmod(store_path, 0o644)
             self.assertEqual(store.get("chat", "sender"), "")
+            self.assertEqual(os.stat(store_path).st_mode & 0o777, 0o600)
             with open(store_path, "w", encoding="utf-8") as f:
                 json.dump({"conversations": {"bad": "not-dict"}}, f)
             self.assertEqual(store._get_item("bad", "sender"), {})
@@ -512,6 +531,7 @@ class BotCoreCoverageTest(unittest.IsolatedAsyncioTestCase):
                 json.dump({"conversations": {key: "not-dict"}}, f)
             store.set("chat", "sender", "conv-recovered")
             self.assertEqual(store.get("chat", "sender"), "conv-recovered")
+            self.assertEqual(os.stat(store_path).st_mode & 0o777, 0o600)
             with open(store_path, "w", encoding="utf-8") as f:
                 json.dump([], f)
             self.assertTrue(store.is_session_enabled("chat", "sender"))
@@ -549,8 +569,11 @@ class BotCoreCoverageTest(unittest.IsolatedAsyncioTestCase):
         registry.finish(active)
         self.assertFalse(registry.is_active(context))
 
-        self.assertIn("ValueError", bot_core.build_error_content(ValueError("x" * 600), language="zh-CN"))
-        self.assertIn("RDS AI 诊断失败", bot_core.build_error_content(ValueError("x"), language="zh-CN"))
+        user_error = bot_core.build_error_content(ValueError("secret internal detail"), language="zh-CN", trace_id="trace-123")
+        self.assertIn("RDS AI 诊断失败", user_error)
+        self.assertIn("trace-123", user_error)
+        self.assertNotIn("ValueError", user_error)
+        self.assertNotIn("secret internal detail", user_error)
         self.assertIn("no response content", bot_core.build_no_message_content(language="en-US"))
         self.assertIn("未返回回复内容", bot_core.build_no_message_content(language="zh-CN"))
         self.assertIn("/btw", bot_core.build_busy_content(language="zh-CN"))
@@ -1188,7 +1211,7 @@ class FeishuBridgeCoverageTest(unittest.IsolatedAsyncioTestCase):
             bridge._on_message_event(SimpleNamespace(event=SimpleNamespace()))
         run_threadsafe.assert_called_once()
 
-    async def test_event_data_ignores_malformed_and_replies_to_non_text(self):
+    async def test_event_data_ignores_malformed_and_replies_to_authorized_non_text(self):
         bridge = self.make_bridge()
         bridge.send_text = AsyncMock(return_value=True)
         await bridge.handle_message_event_data(SimpleNamespace(event=SimpleNamespace()))
@@ -1200,13 +1223,29 @@ class FeishuBridgeCoverageTest(unittest.IsolatedAsyncioTestCase):
                 message=SimpleNamespace(chat_id="chat-1", message_id="msg-1", message_type="image", content="{}"),
             )
         )
-        await bridge.handle_message_event_data(data)
+        with patch.dict(os.environ, {"FEISHU_ALLOWED_USERS": "ou_1"}, clear=True):
+            await bridge.handle_message_event_data(data)
         bridge.send_text.assert_awaited_once_with(
             "chat-1",
             "I can only process text messages.",
             reply_to_message_id="msg-1",
             source=bot_core.SessionSource("feishu", "chat-1", "dm", "ou_1"),
         )
+
+    async def test_unauthorized_feishu_non_text_message_is_ignored(self):
+        bridge = self.make_bridge()
+        bridge.send_text = AsyncMock(return_value=True)
+        data = SimpleNamespace(
+            event=SimpleNamespace(
+                sender=SimpleNamespace(sender_id=SimpleNamespace(open_id="ou_1")),
+                message=SimpleNamespace(chat_id="chat-1", message_id="msg-1", message_type="image", content="{}"),
+            )
+        )
+
+        with patch.dict(os.environ, {}, clear=True):
+            await bridge.handle_message_event_data(data)
+
+        bridge.send_text.assert_not_awaited()
 
     async def test_handle_event_data_accepts_group_mentions_and_dict_sender_ids(self):
         bridge = self.make_bridge()
@@ -1325,7 +1364,10 @@ class FeishuBridgeCoverageTest(unittest.IsolatedAsyncioTestCase):
         bridge.remove_processing_reaction = AsyncMock(return_value=True)
         bridge.add_failure_reaction = AsyncMock(return_value="failure-1")
         await bridge.handle_text_message(chat_id="chat", sender_id="sender", message_id="msg", text="query")
-        self.assertIn("ConnectionError", bridge.send_text.await_args.args[1])
+        self.assertIn("RDS AI 诊断失败", bridge.send_text.await_args.args[1])
+        self.assertIn("msg", bridge.send_text.await_args.args[1])
+        self.assertNotIn("ConnectionError", bridge.send_text.await_args.args[1])
+        self.assertNotIn("reset", bridge.send_text.await_args.args[1])
         bridge.add_failure_reaction.assert_awaited_once_with("msg")
 
         bridge = feishu_bridge.FeishuBridge(
@@ -1972,7 +2014,10 @@ class WeComBridgeCoverageTest(unittest.IsolatedAsyncioTestCase):
         )
         failing._send_frame = AsyncMock(side_effect=lambda frame: proactive.append(frame) or True)
         await failing.handle_text_message(source=source, text="query", reply_req_id="req-error")
-        self.assertIn("ConnectionError", proactive[-1]["body"]["markdown"]["content"])
+        self.assertIn("RDS AI 诊断失败", proactive[-1]["body"]["markdown"]["content"])
+        self.assertIn("req-error", proactive[-1]["body"]["markdown"]["content"])
+        self.assertNotIn("ConnectionError", proactive[-1]["body"]["markdown"]["content"])
+        self.assertNotIn("reset", proactive[-1]["body"]["markdown"]["content"])
 
         cancelled = wecom_bridge.WeComBridge(
             bot_id="bot",
@@ -2003,6 +2048,13 @@ class WeComBridgeCoverageTest(unittest.IsolatedAsyncioTestCase):
 
 
 class QQBridgeCoverageTest(unittest.IsolatedAsyncioTestCase):
+    def setUp(self):
+        self.qq_env_patcher = patch.dict(os.environ, {"QQ_HTTP_VERIFY": "true"})
+        self.qq_env_patcher.start()
+
+    def tearDown(self):
+        self.qq_env_patcher.stop()
+
     async def test_qq_normalizes_events_checks_auth_and_routes_reply(self):
         fake_copilot = FakeCopilot([MessageEvent("task-1", "conv-1", "qq answer")])
         bridge = qq_bridge.QQBridge(
@@ -2105,6 +2157,10 @@ class QQBridgeCoverageTest(unittest.IsolatedAsyncioTestCase):
             self.assertEqual(qq_bridge._calculate_reconnect_delay(2), 2)
         with patch.dict(os.environ, {"QQ_HTTP_VERIFY": "off"}, clear=True):
             self.assertFalse(qq_bridge._read_bool_env("QQ_HTTP_VERIFY"))
+        with patch.dict(os.environ, {"QQ_HTTP_VERIFY": "off"}, clear=True):
+            with self.assertRaisesRegex(RuntimeError, "QQ_HTTP_VERIFY=false"):
+                qq_bridge.QQBridge(app_id="app", client_secret="secret")
+        with patch.dict(os.environ, {"QQ_HTTP_VERIFY": "off", "RDS_BOT_ENV": "dev"}, clear=True):
             self.assertFalse(qq_bridge.QQBridge(app_id="app", client_secret="secret").tls_verify)
 
         guild_source, guild_text = qq_bridge.source_and_text_from_qq_event(
@@ -2287,7 +2343,7 @@ class QQBridgeCoverageTest(unittest.IsolatedAsyncioTestCase):
 
         no_verify_ws = FakeWebSocket([SimpleNamespace(type=qq_bridge.aiohttp.WSMsgType.CLOSED)])
         no_verify_session = FakeSession(no_verify_ws)
-        with patch.dict(os.environ, {"QQ_HTTP_VERIFY": "false"}, clear=True):
+        with patch.dict(os.environ, {"QQ_HTTP_VERIFY": "false", "RDS_BOT_ENV": "dev"}, clear=True):
             no_verify_bridge = qq_bridge.QQBridge(app_id="app", client_secret="secret", store=bot_core.CopilotConversationStore(""))
         no_verify_bridge._running = True
         no_verify_bridge.get_gateway_url = AsyncMock(return_value="wss://gateway.qq")
@@ -2389,7 +2445,9 @@ class QQBridgeCoverageTest(unittest.IsolatedAsyncioTestCase):
         )
         failing._api_request = AsyncMock(return_value={"id": "sent"})
         await failing.handle_text_message(source=source, text="query")
-        self.assertIn("ConnectionError", failing._api_request.await_args.args[2]["markdown"]["content"])
+        self.assertIn("RDS AI 诊断失败", failing._api_request.await_args.args[2]["markdown"]["content"])
+        self.assertNotIn("ConnectionError", failing._api_request.await_args.args[2]["markdown"]["content"])
+        self.assertNotIn("reset", failing._api_request.await_args.args[2]["markdown"]["content"])
 
 
 class BridgeFactoryControlCommandRegressionTest(unittest.IsolatedAsyncioTestCase):
@@ -2425,12 +2483,13 @@ class BridgeFactoryControlCommandRegressionTest(unittest.IsolatedAsyncioTestCase
         )
         self.assertIn("factory-skill", wecom.send_text.await_args.args[1])
 
-        qq = qq_bridge.QQBridge(
-            app_id="app",
-            client_secret="secret",
-            store=bot_core.CopilotConversationStore(""),
-            copilot_factory=FactoryStyleCopilot,
-        )
+        with patch.dict(os.environ, {"QQ_HTTP_VERIFY": "true"}):
+            qq = qq_bridge.QQBridge(
+                app_id="app",
+                client_secret="secret",
+                store=bot_core.CopilotConversationStore(""),
+                copilot_factory=FactoryStyleCopilot,
+            )
         qq.send_text = AsyncMock(return_value=True)
         await qq.handle_text_message(
             source=bot_core.SessionSource("qqbot", "qq-chat", "dm", "qq-user"),
@@ -2547,7 +2606,11 @@ class DingTalkBridgeCoverageTest(unittest.IsolatedAsyncioTestCase):
         self.assertIsInstance(stream_client, dingtalk_bridge.ObservableDingTalkStreamClient)
         self.assertEqual(dingtalk_bridge.convert_json_values_to_string({"a": 1, "b": "x"}), {"a": "1", "b": "x"})
         self.assertEqual(dingtalk_bridge.get_conversation_store_file_path(), bot_core.get_conversation_store_file_path())
-        self.assertIn("RDS AI diagnosis failed", dingtalk_bridge.build_error_card_content(RuntimeError("x" * 600), language="en-US"))
+        error_content = dingtalk_bridge.build_error_card_content(RuntimeError("secret detail"), language="en-US", trace_id="trace-1")
+        self.assertIn("RDS AI diagnosis failed", error_content)
+        self.assertIn("trace-1", error_content)
+        self.assertNotIn("RuntimeError", error_content)
+        self.assertNotIn("secret detail", error_content)
         self.assertIn("no response content", dingtalk_bridge.build_no_message_card_content(language="en-US"))
         with patch("main.logger.add") as add:
             main._LOGGING_CONFIGURED = False
@@ -2911,6 +2974,21 @@ class DingTalkBridgeCoverageTest(unittest.IsolatedAsyncioTestCase):
         handler.reply_text.assert_not_called()
         card_reply.assert_not_awaited()
         plain_reply.assert_not_awaited()
+
+    async def test_unauthorized_dingtalk_non_text_message_is_ignored_before_reply(self):
+        callback = SimpleNamespace(data={})
+        handler = dingtalk_bridge.CardBotHandler(logger=Mock())
+        handler.reply_text = Mock()
+        with tempfile.TemporaryDirectory() as tmp_dir, \
+            patch.dict(os.environ, {"RDS_COPILOT_CONVERSATION_STORE_FILE": os.path.join(tmp_dir, "conversations.json")}, clear=True), \
+            patch(
+                "bridges.dingtalk.dingtalk_stream.ChatbotMessage.from_dict",
+                return_value=FakeIncomingMessage("query", message_type="image"),
+            ):
+            status = await handler.process(callback)
+
+        self.assertEqual(status, (dingtalk_bridge.AckMessage.STATUS_OK, "OK"))
+        handler.reply_text.assert_not_called()
 
     async def test_card_bot_still_working_status_uses_webhook_or_reply_text(self):
         async def fake_notifier(active_state, send_callback, **kwargs):

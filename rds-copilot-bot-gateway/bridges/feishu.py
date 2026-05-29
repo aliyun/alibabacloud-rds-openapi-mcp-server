@@ -503,6 +503,21 @@ class FeishuBridge:
             user_id_alt=sender_id_alt,
             is_bot=is_bot,
         )
+        message_text = _load_feishu_message_text(getattr(message, "content", "") or "")
+        query_text = _strip_feishu_leading_mentions(message_text, message)
+        mentioned = _is_message_mentioning_bot(message, message_text, self.bot_tokens or None)
+        pre_filter_allowed = should_accept_session_source(source, query_text, mentioned=mentioned)
+        authorized = authorize_session_source(source)
+        if not pre_filter_allowed or not authorized:
+            logger.info(
+                "Feishu message ignored: chat_id={}, sender_id={}, pre_filter_allowed={}, authorized={}",
+                chat_id,
+                sender_id,
+                pre_filter_allowed,
+                authorized,
+            )
+            return
+
         message_type = str(getattr(message, "message_type", "") or "").lower()
         if message_type != "text":
             await self.send_text(
@@ -513,8 +528,6 @@ class FeishuBridge:
             )
             return
 
-        message_text = _load_feishu_message_text(getattr(message, "content", "") or "")
-        query_text = _strip_feishu_leading_mentions(message_text, message)
         await self.handle_text_message(
             chat_id=chat_id,
             sender_id=sender_id,
@@ -524,7 +537,7 @@ class FeishuBridge:
             is_bot=is_bot,
             message_id=getattr(message, "message_id", "") or "",
             text=query_text,
-            mentioned=_is_message_mentioning_bot(message, message_text, self.bot_tokens or None),
+            mentioned=mentioned,
         )
 
     async def handle_text_message(
@@ -630,7 +643,7 @@ class FeishuBridge:
             if reaction_id:
                 await self.remove_processing_reaction(message_id, reaction_id)
         except Exception as e:
-            final_display_content = build_error_content(e, language)
+            final_display_content = build_error_content(e, language, trace_id=message_id)
             logger.exception("Feishu Copilot reply failed: %s", e)
             await self.send_text(chat_id, final_display_content, reply_to_message_id=message_id, source=source)
             if reaction_id:
