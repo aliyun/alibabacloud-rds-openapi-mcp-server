@@ -102,6 +102,7 @@ class FakeIncomingMessage:
         self.message_type = message_type
         self.robot_code = "robot-code-1"
         self.session_webhook = ""
+        self.sender_staff_id = "staff-1"
 
 
 class FakeHandler:
@@ -1198,7 +1199,12 @@ class FeishuBridgeCoverageTest(unittest.IsolatedAsyncioTestCase):
             )
         )
         await bridge.handle_message_event_data(data)
-        bridge.send_text.assert_awaited_once_with("chat-1", "I can only process text messages.", reply_to_message_id="msg-1")
+        bridge.send_text.assert_awaited_once_with(
+            "chat-1",
+            "I can only process text messages.",
+            reply_to_message_id="msg-1",
+            source=bot_core.SessionSource("feishu", "chat-1", "dm", "ou_1"),
+        )
 
     async def test_handle_event_data_accepts_group_mentions_and_dict_sender_ids(self):
         bridge = self.make_bridge()
@@ -1228,7 +1234,18 @@ class FeishuBridgeCoverageTest(unittest.IsolatedAsyncioTestCase):
         with patch.dict(os.environ, {"FEISHU_ALLOW_ALL_USERS": "true", "FEISHU_BOT_OPEN_ID": "ou_bot_1"}, clear=True):
             await bridge.handle_message_event_data(event_data)
 
-        bridge.send_text.assert_awaited_with("oc_group_1", "answer", reply_to_message_id="om_msg_1")
+        bridge.send_text.assert_awaited_with(
+            "oc_group_1",
+            "answer",
+            reply_to_message_id="om_msg_1",
+            source=bot_core.SessionSource(
+                "feishu",
+                "oc_group_1",
+                "group",
+                "ou_user_1",
+                user_id_alt="on_user_1",
+            ),
+        )
 
     async def test_group_mention_prefix_is_stripped_before_control_command_matching(self):
         bridge = self.make_bridge()
@@ -1427,6 +1444,32 @@ class FeishuBridgeCoverageTest(unittest.IsolatedAsyncioTestCase):
         create_payload = json.loads(message_api.create_calls[0].request_body.content)
         self.assertTrue(create_payload["text"].endswith("...(truncated)"))
 
+        group_source = bot_core.SessionSource("feishu", "chat", "group", "ou_user_1", user_name="Alice")
+        self.assertTrue(
+            await bridge.send_text(
+                "chat",
+                "group hello",
+                reply_to_message_id="msg-group",
+                source=group_source,
+            )
+        )
+        group_payload = json.loads(message_api.reply_calls[-1].request_body.content)
+        self.assertEqual(group_payload["text"], '<at user_id="ou_user_1">Alice</at>\ngroup hello')
+        self.assertTrue(
+            await bridge.send_text(
+                "chat",
+                "### Agents\n- `agent-1` test",
+                reply_to_message_id="msg-group-md",
+                source=group_source,
+            )
+        )
+        group_markdown_payload = json.loads(message_api.reply_calls[-1].request_body.content)
+        self.assertEqual(group_markdown_payload["zh_cn"]["content"][0][0]["tag"], "at")
+        self.assertEqual(group_markdown_payload["zh_cn"]["content"][0][0]["user_id"], "ou_user_1")
+        self.assertEqual(group_markdown_payload["zh_cn"]["content"][0][0]["user_name"], "Alice")
+        self.assertEqual(group_markdown_payload["zh_cn"]["content"][1][0]["tag"], "md")
+        self.assertIn("### Agents", group_markdown_payload["zh_cn"]["content"][1][0]["text"])
+
         message_api.reply_response = Response(False)
         self.assertFalse(await bridge.send_text("chat", "hello", reply_to_message_id="msg-2"))
         message_api.reply = Mock(side_effect=RuntimeError("send failed"))
@@ -1593,9 +1636,15 @@ class WeComBridgeCoverageTest(unittest.IsolatedAsyncioTestCase):
             heartbeat_seconds=3,
         )
         bridge._running = True
+        wecom_logs = []
+        sink_id = wecom_bridge.logger.add(lambda message: wecom_logs.append(str(message)), level="INFO")
         with patch("bridges.wecom.aiohttp.ClientSession", return_value=session):
-            with self.assertRaisesRegex(RuntimeError, "websocket closed"):
-                await bridge._connect_once()
+            try:
+                with self.assertRaisesRegex(RuntimeError, "websocket closed"):
+                    await bridge._connect_once()
+            finally:
+                wecom_bridge.logger.remove(sink_id)
+        self.assertIn("WeCom bridge connected by websocket", "\n".join(wecom_logs))
         self.assertEqual(session.ws_connect_kwargs[1]["heartbeat"], 6)
         self.assertEqual(ws.sent[0]["cmd"], wecom_bridge.APP_CMD_SUBSCRIBE)
         self.assertEqual(ws.sent[0]["body"]["bot_id"], "bot")
@@ -1852,6 +1901,14 @@ class WeComBridgeCoverageTest(unittest.IsolatedAsyncioTestCase):
         bridge._send_frame = AsyncMock(side_effect=lambda frame: proactive.append(frame) or True)
         self.assertTrue(await bridge.send_text("chat-1", "hello"))
         self.assertEqual(proactive[-1]["cmd"], "aibot_send_msg")
+        self.assertTrue(
+            await bridge.send_text(
+                "room-1",
+                "group hello",
+                source=bot_core.SessionSource("wecom", "room-1", "group", "user-1"),
+            )
+        )
+        self.assertEqual(proactive[-1]["body"]["markdown"]["content"], "<@user-1>\ngroup hello")
 
         registry = bot_core.ActiveConversationRegistry()
         source = bot_core.SessionSource("wecom", "chat-1", "dm", "user-1")
@@ -1952,7 +2009,7 @@ class QQBridgeCoverageTest(unittest.IsolatedAsyncioTestCase):
         bridge._api_request.assert_awaited_with(
             "POST",
             "/v2/groups/group-openid-1/messages",
-            {"markdown": {"content": "qq answer"}, "msg_type": 2},
+            {"markdown": {"content": "<@member-openid-1>\nqq answer"}, "msg_type": 2, "msg_id": "msg-2"},
         )
 
     async def test_qq_token_gateway_payload_and_startup_validation(self):
@@ -2029,6 +2086,16 @@ class QQBridgeCoverageTest(unittest.IsolatedAsyncioTestCase):
         self.assertEqual(dm_source.chat_id, "guild-1")
         unknown_source, unknown_text = qq_bridge.source_and_text_from_qq_event("OTHER", {"content": "x"})
         self.assertEqual((unknown_source.chat_id, unknown_text), ("", "x"))
+        group_source, group_text = qq_bridge.source_and_text_from_qq_event(
+            "GROUP_AT_MESSAGE_CREATE",
+            {
+                "id": "msg-2",
+                "group_openid": "group-openid-1",
+                "content": "<@!bot> group",
+                "author": {"member_openid": "member-openid-1"},
+            },
+        )
+        self.assertEqual((group_source.thread_id, group_text), ("msg-2", "group"))
 
         bridge = qq_bridge.QQBridge(app_id="app", client_secret="secret", store=bot_core.CopilotConversationStore(""))
         bridge._api_request = AsyncMock(return_value={"id": "sent"})
@@ -2036,7 +2103,11 @@ class QQBridgeCoverageTest(unittest.IsolatedAsyncioTestCase):
         bridge._api_request.assert_awaited_with("POST", "/channels/guild-1/messages", {"markdown": {"content": "channel dm"}, "msg_type": 2})
         bridge._api_request.reset_mock()
         await bridge.send_text(guild_source, "channel")
-        bridge._api_request.assert_awaited_with("POST", "/channels/channel-1/messages", {"markdown": {"content": "channel"}, "msg_type": 2})
+        bridge._api_request.assert_awaited_with(
+            "POST",
+            "/channels/channel-1/messages",
+            {"markdown": {"content": "<@user-1>\nchannel"}, "msg_type": 2},
+        )
         await bridge.handle_event("C2C_MESSAGE_CREATE", {"id": "empty", "content": "", "author": {"user_openid": "u"}})
 
         bridge.ensure_access_token = AsyncMock(return_value="token-1")
@@ -2168,9 +2239,15 @@ class QQBridgeCoverageTest(unittest.IsolatedAsyncioTestCase):
             connect_once = qq_bridge.QQBridge(app_id="app", client_secret="secret", store=bot_core.CopilotConversationStore(""))
         connect_once._running = True
         connect_once.get_gateway_url = AsyncMock(return_value="wss://gateway.qq")
+        qq_logs = []
+        sink_id = qq_bridge.logger.add(lambda message: qq_logs.append(str(message)), level="INFO")
         with patch("bridges.qq.aiohttp.ClientSession", return_value=session):
-            with self.assertRaisesRegex(RuntimeError, "websocket closed"):
-                await connect_once._connect_once()
+            try:
+                with self.assertRaisesRegex(RuntimeError, "websocket closed"):
+                    await connect_once._connect_once()
+            finally:
+                qq_bridge.logger.remove(sink_id)
+        self.assertIn("QQ bridge connected by websocket", "\n".join(qq_logs))
         self.assertEqual(session.ws_connect_kwargs, ("wss://gateway.qq", {}))
         self.assertTrue(close_ws.closed)
         self.assertTrue(session.closed)
@@ -2464,6 +2541,17 @@ class DingTalkBridgeCoverageTest(unittest.IsolatedAsyncioTestCase):
             self.assertTrue(await dingtalk_bridge.send_dingtalk_session_webhook("https://hook", "x" * (dingtalk_bridge.MAX_PLAIN_MESSAGE_LENGTH + 1)))
         self.assertTrue(posted["payload"]["markdown"]["text"].endswith("...(truncated)"))
 
+        with patch("bridges.dingtalk.asyncio.to_thread", new=fake_to_thread):
+            self.assertTrue(
+                await dingtalk_bridge.send_dingtalk_session_webhook(
+                    "https://hook",
+                    "group hello",
+                    mention_user_id="staff-1",
+                )
+            )
+        self.assertEqual(posted["payload"]["at"], {"atUserIds": ["staff-1"], "isAtAll": False})
+        self.assertEqual(posted["payload"]["markdown"]["text"], "@staff-1\ngroup hello")
+
         with self.assertRaisesRegex(ValueError, "sessionWebhook"):
             await dingtalk_bridge.send_dingtalk_session_webhook("", "content")
 
@@ -2588,13 +2676,13 @@ class DingTalkBridgeCoverageTest(unittest.IsolatedAsyncioTestCase):
 
         with patch("bridges.dingtalk.RdsCopilot", return_value=fake_copilot):
             await dingtalk_bridge.handle_reply_plain_message(handler, incoming, {}, session_enabled=False)
-        self.assertEqual(handler.replies[-1][0], "answer")
+        self.assertEqual(handler.replies[-1][0], "@staff-1\nanswer")
 
         handler = FakeHandler()
         with patch("bridges.dingtalk.RdsCopilot", return_value=fake_copilot), \
             patch("bridges.dingtalk.send_dingtalk_session_webhook", new=AsyncMock(side_effect=RuntimeError("webhook failed"))):
             await dingtalk_bridge.handle_reply_plain_message(handler, incoming, {"sessionWebhook": "https://hook"}, session_enabled=False)
-        self.assertEqual(handler.replies[-1][0], "answer")
+        self.assertEqual(handler.replies[-1][0], "@staff-1\nanswer")
 
         handler = FakeHandler()
         empty_copilot = FakeCopilot([])
@@ -2626,7 +2714,7 @@ class DingTalkBridgeCoverageTest(unittest.IsolatedAsyncioTestCase):
         non_text = FakeIncomingMessage(message_type="image")
         with patch("bridges.dingtalk.dingtalk_stream.ChatbotMessage.from_dict", return_value=non_text):
             self.assertEqual(await handler.process(callback), (dingtalk_bridge.AckMessage.STATUS_OK, "OK"))
-        handler.reply_text.assert_called_with("I can only process text messages.", non_text)
+        handler.reply_text.assert_called_with("@staff-1\nI can only process text messages.", non_text)
 
         handler = dingtalk_bridge.CardBotHandler(logger=Mock())
         handler.reply_text = Mock()
@@ -2648,7 +2736,7 @@ class DingTalkBridgeCoverageTest(unittest.IsolatedAsyncioTestCase):
         command_message.session_webhook = "https://hook"
         with patch("bridges.dingtalk.send_dingtalk_session_webhook", new=AsyncMock(side_effect=RuntimeError("webhook failed"))):
             await handler.reply_command_content("### Help", command_message, {"sessionWebhook": "https://hook"})
-        handler.reply_text.assert_called_once_with("### Help", command_message)
+        handler.reply_text.assert_called_once_with("@staff-1\n### Help", command_message)
 
         with tempfile.TemporaryDirectory() as tmp_dir:
             store_path = os.path.join(tmp_dir, "conversations.json")
@@ -2680,7 +2768,10 @@ class DingTalkBridgeCoverageTest(unittest.IsolatedAsyncioTestCase):
                 patch("core.bot_core.RdsCopilot", return_value=stop_copilot), \
                 patch("bridges.dingtalk.dingtalk_stream.ChatbotMessage.from_dict", return_value=FakeIncomingMessage("/stop")):
                 await handler.process(callback)
-            self.assertEqual([call.args[0] for call in handler.reply_text.call_args_list], ["partial dingtalk answer", "已停止当前任务。"])
+            self.assertEqual(
+                [call.args[0] for call in handler.reply_text.call_args_list],
+                ["@staff-1\npartial dingtalk answer", "@staff-1\n已停止当前任务。"],
+            )
             self.assertEqual(stop_copilot.stopped, ["task-stop-ding"])
 
         async def run_process(card_enabled, callback_data):
@@ -2790,7 +2881,7 @@ class DingTalkBridgeCoverageTest(unittest.IsolatedAsyncioTestCase):
         status, handler, send_webhook, card_reply = await run_once({})
         self.assertEqual(status, (dingtalk_bridge.AckMessage.STATUS_OK, "OK"))
         handler.reply_text.assert_any_call(
-            "Still working... (3 min elapsed — events 10, receiving stream response)",
+            "@staff-1\nStill working... (3 min elapsed — events 10, receiving stream response)",
             unittest.mock.ANY,
         )
         send_webhook.assert_not_awaited()

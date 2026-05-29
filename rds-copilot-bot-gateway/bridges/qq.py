@@ -82,25 +82,35 @@ def strip_qq_mention(text: str) -> str:
     return re.sub(r"^\s*<@!?\w+>\s*", "", text or "").strip()
 
 
+def _with_qq_group_mention(content: str, source: SessionSource) -> str:
+    if (source.chat_type or "").lower() not in {"group", "channel"} or not source.user_id:
+        return content
+    mention = f"<@{source.user_id}>"
+    if content.startswith(mention):
+        return content
+    return f"{mention}\n{content}"
+
+
 def source_and_text_from_qq_event(event_type: str, data: dict[str, Any]) -> tuple[SessionSource, str]:
     content = str(data.get("content") or "").strip()
     author = data.get("author") if isinstance(data.get("author"), dict) else {}
+    message_id = str(data.get("id") or "").strip()
     if event_type == "C2C_MESSAGE_CREATE":
         user_openid = str(author.get("user_openid") or "").strip()
-        return SessionSource(QQ_PLATFORM, user_openid, "dm", user_openid), content
+        return SessionSource(QQ_PLATFORM, user_openid, "dm", user_openid, thread_id=message_id), content
     if event_type == "GROUP_AT_MESSAGE_CREATE":
         group_openid = str(data.get("group_openid") or "").strip()
         member_openid = str(author.get("member_openid") or "").strip()
-        return SessionSource(QQ_PLATFORM, group_openid, "group", member_openid), strip_qq_mention(content)
+        return SessionSource(QQ_PLATFORM, group_openid, "group", member_openid, thread_id=message_id), strip_qq_mention(content)
     if event_type in {"GUILD_MESSAGE_CREATE", "GUILD_AT_MESSAGE_CREATE"}:
         channel_id = str(data.get("channel_id") or "").strip()
         user_id = str(author.get("id") or "").strip()
         user_name = str(author.get("username") or "").strip()
-        return SessionSource(QQ_PLATFORM, channel_id, "channel", user_id, user_name=user_name), content
+        return SessionSource(QQ_PLATFORM, channel_id, "channel", user_id, user_name=user_name, thread_id=message_id), content
     if event_type == "DIRECT_MESSAGE_CREATE":
         guild_id = str(data.get("guild_id") or "").strip()
         user_id = str(author.get("id") or "").strip()
-        return SessionSource(QQ_PLATFORM, guild_id, "dm", user_id), content
+        return SessionSource(QQ_PLATFORM, guild_id, "dm", user_id, thread_id=message_id), content
     return SessionSource(QQ_PLATFORM, "", "dm", ""), content
 
 
@@ -173,6 +183,7 @@ class QQBridge:
             gateway_url = await self.get_gateway_url()
             ws_kwargs = {} if self.tls_verify else {"ssl": False}
             self.ws = await self.session.ws_connect(gateway_url, **ws_kwargs)
+            logger.info("QQ bridge connected by websocket, gateway_url={}", gateway_url)
             await self._receive_gateway_loop()
         finally:
             if self._heartbeat_task:
@@ -302,6 +313,7 @@ class QQBridge:
         }:
             if event_type == "READY":
                 self.session_id = str(data.get("session_id") or "")
+                logger.info("QQ bridge authenticated by websocket, session_id_present={}", bool(self.session_id))
                 return
             await self.handle_event(event_type, data)
 
@@ -422,8 +434,11 @@ class QQBridge:
         return None
 
     async def send_text(self, source: SessionSource, content: str) -> bool:
-        message_text = ((content or "").strip() or build_no_message_content())[:MAX_QQ_TEXT_LENGTH]
+        message_text = (content or "").strip() or build_no_message_content()
+        message_text = _with_qq_group_mention(message_text, source)[:MAX_QQ_TEXT_LENGTH]
         body = {"markdown": {"content": message_text}, "msg_type": QQ_MSG_TYPE_MARKDOWN}
+        if source.thread_id and (source.chat_type or "").lower() in {"group", "channel"}:
+            body["msg_id"] = source.thread_id
         if source.chat_type == "dm" and source.chat_id == source.user_id:
             path = f"/v2/users/{source.chat_id}/messages"
         elif source.chat_type == "dm":

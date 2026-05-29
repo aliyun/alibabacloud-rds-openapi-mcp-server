@@ -157,6 +157,33 @@ def extract_session_webhook(callback_data: Any, incoming_message: Any = None) ->
     return walk(callback_data)
 
 
+def _is_dingtalk_group_message(incoming_message: Any) -> bool:
+    conversation_id = str(getattr(incoming_message, "conversation_id", "") or "")
+    sender_id = str(getattr(incoming_message, "sender_id", "") or "")
+    return bool(conversation_id and sender_id and conversation_id != sender_id)
+
+
+def _dingtalk_group_mention_user_id(incoming_message: Any) -> str:
+    if not _is_dingtalk_group_message(incoming_message):
+        return ""
+    return str(getattr(incoming_message, "sender_staff_id", "") or getattr(incoming_message, "sender_id", "") or "").strip()
+
+
+def _with_dingtalk_group_mention(content: str, mention_user_id: str = "") -> str:
+    message_text = (content or "").strip() or build_no_message_card_content()
+    mention = f"@{mention_user_id}" if mention_user_id else ""
+    if not mention or message_text.startswith(mention):
+        return message_text
+    return f"{mention}\n{message_text}"
+
+
+def _reply_text_with_dingtalk_group_mention(handler: Any, content: str, incoming_message: Any):
+    return handler.reply_text(
+        _with_dingtalk_group_mention(content, _dingtalk_group_mention_user_id(incoming_message)),
+        incoming_message,
+    )
+
+
 def _post_dingtalk_session_webhook(session_webhook: str, payload: dict):
     data = json.dumps(payload, ensure_ascii=False).encode("utf-8")
     request = urllib_request.Request(
@@ -178,12 +205,14 @@ async def send_dingtalk_session_webhook(
     content: str,
     *,
     trace_id: str = "",
+    mention_user_id: str = "",
 ):
     """Send a normal DingTalk markdown message when card mode is disabled."""
     if not session_webhook:
         raise ValueError("sessionWebhook is empty")
 
     message_text = (content or "").strip() or build_no_message_card_content()
+    message_text = _with_dingtalk_group_mention(message_text, mention_user_id)
     if len(message_text) > MAX_PLAIN_MESSAGE_LENGTH:
         message_text = message_text[:MAX_PLAIN_MESSAGE_LENGTH] + "\n\n...(truncated)"
 
@@ -194,6 +223,8 @@ async def send_dingtalk_session_webhook(
             "text": message_text,
         },
     }
+    if mention_user_id:
+        payload["at"] = {"atUserIds": [mention_user_id], "isAtAll": False}
     try:
         await asyncio.to_thread(_post_dingtalk_session_webhook, session_webhook, payload)
         logger.info(
@@ -472,13 +503,14 @@ async def handle_reply_plain_message(
                 session_webhook,
                 final_display_content,
                 trace_id=trace_id,
+                mention_user_id=_dingtalk_group_mention_user_id(incoming_message),
             )
         else:
             self.logger.warning(f"[trace_id={trace_id}] sessionWebhook missing, fallback to reply_text")
-            self.reply_text(final_display_content, incoming_message)
+            _reply_text_with_dingtalk_group_mention(self, final_display_content, incoming_message)
     except Exception as e:
         self.logger.exception(f"[trace_id={trace_id}] send plain reply failed: {e}")
-        self.reply_text(final_display_content, incoming_message)
+        _reply_text_with_dingtalk_group_mention(self, final_display_content, incoming_message)
 
     return final_contents
 
@@ -604,9 +636,15 @@ class CardBotHandler(dingtalk_stream.ChatbotHandler):
     async def reply_command_content(self, content: str, incoming_message, callback_data=None):
         trace_id = getattr(incoming_message, "message_id", "") or ""
         session_webhook = extract_session_webhook(callback_data or {}, incoming_message)
+        mention_user_id = _dingtalk_group_mention_user_id(incoming_message)
         if session_webhook:
             try:
-                await send_dingtalk_session_webhook(session_webhook, content, trace_id=trace_id)
+                await send_dingtalk_session_webhook(
+                    session_webhook,
+                    content,
+                    trace_id=trace_id,
+                    mention_user_id=mention_user_id,
+                )
                 self.logger.info(
                     f"[trace_id={trace_id}] DingTalk command reply sent by sessionWebhook, "
                     f"content_length={len(content or '')}"
@@ -624,7 +662,7 @@ class CardBotHandler(dingtalk_stream.ChatbotHandler):
                 "fallback to SDK reply_text"
             )
 
-        result = self.reply_text(content, incoming_message)
+        result = _reply_text_with_dingtalk_group_mention(self, content, incoming_message)
         if result is None:
             self.logger.warning(f"[trace_id={trace_id}] DingTalk command SDK reply_text returned no result")
             return False
@@ -636,7 +674,7 @@ class CardBotHandler(dingtalk_stream.ChatbotHandler):
         self.logger.info(f"收到消息：{incoming_message}")
 
         if incoming_message.message_type != "text":
-            self.reply_text("I can only process text messages.", incoming_message)
+            _reply_text_with_dingtalk_group_mention(self, "I can only process text messages.", incoming_message)
             return AckMessage.STATUS_OK, "OK"
 
         store = get_copilot_conversation_store()
@@ -687,7 +725,7 @@ class CardBotHandler(dingtalk_stream.ChatbotHandler):
         active_state = context.registry.try_start(context)
         if active_state is None:
             language = store.get_language(dingtalk_conversation_id, sender_id)
-            self.reply_text(build_busy_content(language), incoming_message)
+            _reply_text_with_dingtalk_group_mention(self, build_busy_content(language), incoming_message)
             return AckMessage.STATUS_OK, "OK"
 
         session_enabled = store.is_session_enabled(dingtalk_conversation_id, sender_id)
@@ -710,10 +748,11 @@ class CardBotHandler(dingtalk_stream.ChatbotHandler):
                     session_webhook,
                     content,
                     trace_id=trace_id,
+                    mention_user_id=_dingtalk_group_mention_user_id(incoming_message),
                 )
             else:
                 self.logger.warning(f"[trace_id={trace_id}] DingTalk status reply has no sessionWebhook")
-                self.reply_text(content, incoming_message)
+                _reply_text_with_dingtalk_group_mention(self, content, incoming_message)
         
         # 创建异步任务处理回复
         async def handle_and_update_conversation():

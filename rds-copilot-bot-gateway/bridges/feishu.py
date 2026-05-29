@@ -273,8 +273,18 @@ def _strip_feishu_leading_mentions(text: str, message: Any) -> str:
     return cleaned
 
 
-def _build_feishu_markdown_post_payload(content: str) -> str:
-    return json.dumps({"zh_cn": {"content": _build_feishu_markdown_post_rows(content)}}, ensure_ascii=False)
+def _feishu_group_mention_post_row(source: Optional[SessionSource]) -> list[dict[str, str]]:
+    if not source or (source.chat_type or "").lower() != "group" or not source.user_id:
+        return []
+    return [{"tag": "at", "user_id": source.user_id, "user_name": source.user_name or ""}]
+
+
+def _build_feishu_markdown_post_payload(content: str, source: Optional[SessionSource] = None) -> str:
+    rows = _build_feishu_markdown_post_rows(content)
+    mention_row = _feishu_group_mention_post_row(source)
+    if mention_row:
+        rows = [mention_row, *rows]
+    return json.dumps({"zh_cn": {"content": rows}}, ensure_ascii=False)
 
 
 def _build_feishu_markdown_post_rows(content: str) -> list[list[dict[str, str]]]:
@@ -317,12 +327,27 @@ def _build_feishu_markdown_post_rows(content: str) -> list[list[dict[str, str]]]
     return rows or [[{"tag": "md", "text": content}]]
 
 
-def _build_feishu_outbound_payload(content: str) -> tuple[str, str]:
+def _build_feishu_outbound_payload(content: str, source: Optional[SessionSource] = None) -> tuple[str, str]:
     if _MARKDOWN_TABLE_RE.search(content):
-        return "text", json.dumps({"text": content}, ensure_ascii=False)
+        return "text", json.dumps({"text": _with_feishu_group_mention(content, source)}, ensure_ascii=False)
     if _MARKDOWN_HINT_RE.search(content):
-        return "post", _build_feishu_markdown_post_payload(content)
-    return "text", json.dumps({"text": content}, ensure_ascii=False)
+        return "post", _build_feishu_markdown_post_payload(content, source)
+    return "text", json.dumps({"text": _with_feishu_group_mention(content, source)}, ensure_ascii=False)
+
+
+def _feishu_group_mention_tag(source: Optional[SessionSource]) -> str:
+    if not source or (source.chat_type or "").lower() != "group" or not source.user_id:
+        return ""
+    return f'<at user_id="{source.user_id}">{source.user_name or ""}</at>'
+
+
+def _with_feishu_group_mention(content: str, source: Optional[SessionSource]) -> str:
+    mention = _feishu_group_mention_tag(source)
+    if not mention:
+        return content
+    if content.startswith(mention):
+        return content
+    return f"{mention}\n{content}"
 
 
 def _start_feishu_ws_client(ws_client: Any) -> None:
@@ -459,24 +484,44 @@ class FeishuBridge:
             logger.debug("Ignore malformed Feishu event without message or sender")
             return
 
+        chat_id = getattr(message, "chat_id", "") or ""
+        chat_type = "group" if str(getattr(message, "chat_type", "") or "").lower() == "group" else "dm"
+        sender_id = _extract_sender_id(sender_id_obj)
+        sender_id_alt = _extract_sender_union_id(sender_id_obj)
+        sender_name = (
+            _string_field(sender, "sender_name")
+            or _string_field(sender, "name")
+            or _string_field(sender, "user_name")
+        )
+        is_bot = str(getattr(sender, "sender_type", "") or "").lower() == "bot"
+        source = SessionSource(
+            FEISHU_PLATFORM,
+            chat_id,
+            chat_type,
+            sender_id,
+            user_name=sender_name,
+            user_id_alt=sender_id_alt,
+            is_bot=is_bot,
+        )
         message_type = str(getattr(message, "message_type", "") or "").lower()
         if message_type != "text":
             await self.send_text(
-                getattr(message, "chat_id", "") or "",
+                chat_id,
                 "I can only process text messages.",
                 reply_to_message_id=getattr(message, "message_id", "") or None,
+                source=source,
             )
             return
 
         message_text = _load_feishu_message_text(getattr(message, "content", "") or "")
         query_text = _strip_feishu_leading_mentions(message_text, message)
         await self.handle_text_message(
-            chat_id=getattr(message, "chat_id", "") or "",
-            sender_id=_extract_sender_id(sender_id_obj),
-            sender_id_alt=_extract_sender_union_id(sender_id_obj),
-            sender_name=str(getattr(sender, "sender_type", "") or ""),
-            chat_type="group" if str(getattr(message, "chat_type", "") or "").lower() == "group" else "dm",
-            is_bot=str(getattr(sender, "sender_type", "") or "").lower() == "bot",
+            chat_id=chat_id,
+            sender_id=sender_id,
+            sender_id_alt=sender_id_alt,
+            sender_name=sender_name,
+            chat_type=chat_type,
+            is_bot=is_bot,
             message_id=getattr(message, "message_id", "") or "",
             text=query_text,
             mentioned=_is_message_mentioning_bot(message, message_text, self.bot_tokens or None),
@@ -537,13 +582,13 @@ class FeishuBridge:
         )
         if control_result.handled:
             for content in control_result.response_contents():
-                await self.send_text(chat_id, content, reply_to_message_id=message_id)
+                await self.send_text(chat_id, content, reply_to_message_id=message_id, source=source)
             return
 
         language = self.store.get_language(chat_id, sender_id, platform=FEISHU_PLATFORM)
         active_state = context.registry.try_start(context)
         if active_state is None:
-            await self.send_text(chat_id, build_busy_content(language), reply_to_message_id=message_id)
+            await self.send_text(chat_id, build_busy_content(language), reply_to_message_id=message_id, source=source)
             return
 
         session_enabled = self.store.is_session_enabled(chat_id, sender_id, platform=FEISHU_PLATFORM)
@@ -554,7 +599,11 @@ class FeishuBridge:
         reaction_id = await self.add_processing_reaction(message_id)
         final_display_content = ""
         notifier_task = asyncio.create_task(
-            run_still_working_notifier(active_state, lambda content: self.send_text(chat_id, content), language=language)
+            run_still_working_notifier(
+                active_state,
+                lambda content: self.send_text(chat_id, content, reply_to_message_id=message_id, source=source),
+                language=language,
+            )
         )
         try:
             final_contents = await call_with_stream(
@@ -577,13 +626,13 @@ class FeishuBridge:
                 return
             if not final_display_content:
                 final_display_content = build_no_message_content(language)
-            await self.send_text(chat_id, final_display_content, reply_to_message_id=message_id)
+            await self.send_text(chat_id, final_display_content, reply_to_message_id=message_id, source=source)
             if reaction_id:
                 await self.remove_processing_reaction(message_id, reaction_id)
         except Exception as e:
             final_display_content = build_error_content(e, language)
             logger.exception("Feishu Copilot reply failed: %s", e)
-            await self.send_text(chat_id, final_display_content, reply_to_message_id=message_id)
+            await self.send_text(chat_id, final_display_content, reply_to_message_id=message_id, source=source)
             if reaction_id:
                 removed = await self.remove_processing_reaction(message_id, reaction_id)
                 if removed:
@@ -603,6 +652,7 @@ class FeishuBridge:
         content: str,
         *,
         reply_to_message_id: str = "",
+        source: Optional[SessionSource] = None,
     ) -> bool:
         if not self.client:
             logger.info("Feishu send skipped because client is not connected")
@@ -611,7 +661,7 @@ class FeishuBridge:
         message_text = (content or "").strip() or build_no_message_content()
         if len(message_text) > MAX_FEISHU_TEXT_LENGTH:
             message_text = message_text[:MAX_FEISHU_TEXT_LENGTH] + "\n\n...(truncated)"
-        msg_type, payload = _build_feishu_outbound_payload(message_text)
+        msg_type, payload = _build_feishu_outbound_payload(message_text, source)
         try:
             if reply_to_message_id:
                 request = self._build_reply_message_request(

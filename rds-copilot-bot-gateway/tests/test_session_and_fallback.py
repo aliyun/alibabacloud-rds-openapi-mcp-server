@@ -22,6 +22,7 @@ class FakeIncomingMessage:
         self.text = FakeText(content)
         self.conversation_id = conversation_id
         self.sender_id = sender_id
+        self.sender_staff_id = "staff-1"
         self.message_id = "msg-1"
         self.message_type = "text"
         self.extensions = {}
@@ -733,7 +734,7 @@ class CardBotHandlerCommandTest(unittest.IsolatedAsyncioTestCase):
             status, message = await handler.process(FakeCallback())
 
             self.assertEqual((status, message), (dingtalk_bridge.AckMessage.STATUS_OK, "OK"))
-            self.assertEqual(replies, ["多轮对话保持已关闭。"])
+            self.assertEqual(replies, ["@staff-1\n多轮对话保持已关闭。"])
             self.assertFalse(store.is_session_enabled("ding-conv-1", "sender-1"))
             self.assertEqual(store.get("ding-conv-1", "sender-1"), "")
 
@@ -750,7 +751,7 @@ class CardBotHandlerCommandTest(unittest.IsolatedAsyncioTestCase):
             status, message = await handler.process(FakeCallback())
 
             self.assertEqual((status, message), (dingtalk_bridge.AckMessage.STATUS_OK, "OK"))
-            self.assertEqual(replies, ["已开启新对话。"])
+            self.assertEqual(replies, ["@staff-1\n已开启新对话。"])
             self.assertTrue(store.is_session_enabled("ding-conv-1", "sender-1"))
             self.assertEqual(store.get("ding-conv-1", "sender-1"), "")
 
@@ -766,7 +767,7 @@ class CardBotHandlerCommandTest(unittest.IsolatedAsyncioTestCase):
             status, message = await handler.process(FakeCallback())
 
             self.assertEqual((status, message), (dingtalk_bridge.AckMessage.STATUS_OK, "OK"))
-            self.assertEqual(replies, ["卡片回复已关闭。"])
+            self.assertEqual(replies, ["@staff-1\n卡片回复已关闭。"])
             self.assertFalse(store.is_card_enabled("ding-conv-1", "sender-1"))
 
     async def test_card_off_routes_to_plain_reply_instead_of_ai_card(self):
@@ -828,7 +829,7 @@ class CardBotHandlerCommandTest(unittest.IsolatedAsyncioTestCase):
             status, message = await handler.process(FakeCallback())
 
             self.assertEqual((status, message), (dingtalk_bridge.AckMessage.STATUS_OK, "OK"))
-            self.assertEqual(replies, ["卡片回复：`off`"])
+            self.assertEqual(replies, ["@staff-1\n卡片回复：`off`"])
 
     async def test_reply_wrapper_swaps_thinking_to_done_reaction(self):
         handler = FakeHandler()
@@ -902,6 +903,7 @@ class FeishuBridgeTest(unittest.IsolatedAsyncioTestCase):
                 "oc_chat_1",
                 "feishu answer",
                 reply_to_message_id="om_msg_1",
+                source=bot_core.SessionSource("feishu", "oc_chat_1", "dm", "ou_user_1"),
             )
             self.assertEqual(fake_copilot.last_request_content, "query")
             self.assertEqual(fake_copilot.last_conversion_id, "")

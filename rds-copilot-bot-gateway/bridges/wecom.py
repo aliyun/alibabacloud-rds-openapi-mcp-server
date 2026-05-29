@@ -107,6 +107,15 @@ def source_from_wecom_body(body: dict[str, Any]) -> SessionSource:
     )
 
 
+def _with_wecom_group_mention(content: str, source: Optional[SessionSource]) -> str:
+    if not source or (source.chat_type or "").lower() != "group" or not source.user_id:
+        return content
+    mention = f"<@{source.user_id}>"
+    if content.startswith(mention):
+        return content
+    return f"{mention}\n{content}"
+
+
 class WeComBridge:
     def __init__(
         self,
@@ -177,6 +186,11 @@ class WeComBridge:
                 receive_timeout=receive_timeout,
             )
             await self._subscribe()
+            logger.info(
+                "WeCom bridge connected by websocket, url={}, heartbeat_seconds={}",
+                self.websocket_url,
+                self.heartbeat_seconds,
+            )
             heartbeat_task = asyncio.create_task(self._heartbeat_loop())
             while self._running:
                 receive_task = asyncio.create_task(self.ws.receive())
@@ -362,13 +376,18 @@ class WeComBridge:
         control_result = await handle_control_command(query_text, context, self.copilot_factory, card_supported=False)
         if control_result.handled:
             for index, content in enumerate(control_result.response_contents()):
-                await self.send_text(source.chat_id, content, reply_req_id=reply_req_id if index == 0 else "")
+                await self.send_text(
+                    source.chat_id,
+                    content,
+                    reply_req_id=reply_req_id if index == 0 else "",
+                    source=source,
+                )
             return
 
         language = self.store.get_language(source.chat_id, source.user_id, platform=WECOM_PLATFORM)
         active_state = context.registry.try_start(context)
         if active_state is None:
-            await self.send_text(source.chat_id, build_busy_content(language), reply_req_id=reply_req_id)
+            await self.send_text(source.chat_id, build_busy_content(language), reply_req_id=reply_req_id, source=source)
             return
 
         session_enabled = self.store.is_session_enabled(source.chat_id, source.user_id, platform=WECOM_PLATFORM)
@@ -378,7 +397,7 @@ class WeComBridge:
         notifier_task = asyncio.create_task(
             run_still_working_notifier(
                 active_state,
-                lambda content: self.send_text(source.chat_id, content, reply_req_id=reply_req_id),
+                lambda content: self.send_text(source.chat_id, content, reply_req_id=reply_req_id, source=source),
                 language=language,
             )
         )
@@ -401,10 +420,10 @@ class WeComBridge:
                 return
             if not final_content:
                 final_content = build_no_message_content(language)
-            await self.send_text(source.chat_id, final_content, reply_req_id=reply_req_id)
+            await self.send_text(source.chat_id, final_content, reply_req_id=reply_req_id, source=source)
         except Exception as e:
             logger.exception("WeCom Copilot reply failed: {}", e)
-            await self.send_text(source.chat_id, build_error_content(e, language), reply_req_id=reply_req_id)
+            await self.send_text(source.chat_id, build_error_content(e, language), reply_req_id=reply_req_id, source=source)
         finally:
             notifier_task.cancel()
             with contextlib.suppress(asyncio.CancelledError):
@@ -414,8 +433,16 @@ class WeComBridge:
     async def _ignore_stream_update(self, update_data: dict):
         return None
 
-    async def send_text(self, chat_id: str, content: str, *, reply_req_id: str = "") -> bool:
+    async def send_text(
+        self,
+        chat_id: str,
+        content: str,
+        *,
+        reply_req_id: str = "",
+        source: Optional[SessionSource] = None,
+    ) -> bool:
         message_text = (content or "").strip() or build_no_message_content()
+        message_text = _with_wecom_group_mention(message_text, source)
         body = {"msgtype": "markdown", "markdown": {"content": message_text[:MAX_WECOM_TEXT_LENGTH]}}
         if reply_req_id:
             frame = {"cmd": APP_CMD_RESPONSE, "headers": {"req_id": reply_req_id}, "body": body}
