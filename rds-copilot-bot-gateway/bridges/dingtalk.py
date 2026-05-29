@@ -601,15 +601,35 @@ class CardBotHandler(dingtalk_stream.ChatbotHandler):
         if logger:
             self.logger = logger
 
-    def reply_command_content(self, content: str, incoming_message):
-        if getattr(incoming_message, "session_webhook", "") and hasattr(self, "reply_markdown"):
+    async def reply_command_content(self, content: str, incoming_message, callback_data=None):
+        trace_id = getattr(incoming_message, "message_id", "") or ""
+        session_webhook = extract_session_webhook(callback_data or {}, incoming_message)
+        if session_webhook:
             try:
-                result = self.reply_markdown("RDS Copilot", content, incoming_message)
-                if result is not None:
-                    return result
-            except Exception:
-                self.logger.warning("DingTalk markdown command reply failed", exc_info=True)
-        return self.reply_text(content, incoming_message)
+                await send_dingtalk_session_webhook(session_webhook, content, trace_id=trace_id)
+                self.logger.info(
+                    f"[trace_id={trace_id}] DingTalk command reply sent by sessionWebhook, "
+                    f"content_length={len(content or '')}"
+                )
+                return True
+            except Exception as e:
+                self.logger.warning(
+                    f"[trace_id={trace_id}] DingTalk command sessionWebhook reply failed, "
+                    f"fallback to SDK reply_text: {e}",
+                    exc_info=True,
+                )
+        else:
+            self.logger.warning(
+                f"[trace_id={trace_id}] DingTalk command reply has no sessionWebhook, "
+                "fallback to SDK reply_text"
+            )
+
+        result = self.reply_text(content, incoming_message)
+        if result is None:
+            self.logger.warning(f"[trace_id={trace_id}] DingTalk command SDK reply_text returned no result")
+            return False
+        self.logger.info(f"[trace_id={trace_id}] DingTalk command reply sent by SDK reply_text")
+        return True
 
     async def process(self, callback: dingtalk_stream.CallbackMessage):
         incoming_message = dingtalk_stream.ChatbotMessage.from_dict(callback.data)
@@ -623,6 +643,8 @@ class CardBotHandler(dingtalk_stream.ChatbotHandler):
         dingtalk_conversation_id = incoming_message.conversation_id
         sender_id = incoming_message.sender_id
         query_text = incoming_message.text.content.strip()
+        session_webhook = extract_session_webhook(callback.data, incoming_message)
+        trace_id = incoming_message.message_id or ""
         source = SessionSource(
             platform="dingtalk",
             chat_id=dingtalk_conversation_id or sender_id,
@@ -632,19 +654,34 @@ class CardBotHandler(dingtalk_stream.ChatbotHandler):
             user_id_alt=getattr(incoming_message, "sender_staff_id", "") or "",
             is_bot=False,
         )
-        if not should_accept_session_source(source, query_text) or not authorize_session_source(source):
+        is_in_at_list = bool(getattr(incoming_message, "is_in_at_list", False))
+        if not is_in_at_list and isinstance(callback.data, dict):
+            is_in_at_list = bool(callback.data.get("isInAtList") or callback.data.get("is_in_at_list"))
+        pre_filter_allowed = should_accept_session_source(source, query_text, mentioned=is_in_at_list)
+        authorized = authorize_session_source(source)
+        self.logger.info(
+            f"[trace_id={trace_id}] DingTalk message metadata: "
+            f"chat_id={source.chat_id}, chat_type={source.chat_type}, sender_id={source.user_id}, "
+            f"sender_staff_id={source.user_id_alt}, is_in_at_list={is_in_at_list}, "
+            f"session_webhook_present={bool(session_webhook)}, query_length={len(query_text)}"
+        )
+        if not pre_filter_allowed or not authorized:
             self.logger.info(
-                "Unauthorized DingTalk message ignored: chat_id=%s sender_id=%s",
-                source.chat_id,
-                source.user_id,
+                f"[trace_id={trace_id}] DingTalk message ignored: "
+                f"chat_id={source.chat_id}, sender_id={source.user_id}, "
+                f"pre_filter_allowed={pre_filter_allowed}, authorized={authorized}"
             )
             return AckMessage.STATUS_OK, "OK"
         context = BotContext("dingtalk", dingtalk_conversation_id, sender_id, store)
 
         control_result = await handle_control_command(query_text, context, card_supported=True)
         if control_result.handled:
+            self.logger.info(
+                f"[trace_id={trace_id}] DingTalk control command handled, "
+                f"responses={len(control_result.response_contents())}"
+            )
             for content in control_result.response_contents():
-                self.reply_command_content(content, incoming_message)
+                await self.reply_command_content(content, incoming_message, callback.data)
             return AckMessage.STATUS_OK, "OK"
 
         active_state = context.registry.try_start(context)
@@ -661,16 +698,21 @@ class CardBotHandler(dingtalk_stream.ChatbotHandler):
         timezone = store.get_timezone(dingtalk_conversation_id, sender_id)
         # 默认保持多轮上下文；用户可以通过 /session off 为当前会话和发送人关闭。
         conversion_id = store.get(dingtalk_conversation_id, sender_id) if session_enabled else ""
+        self.logger.info(
+            f"[trace_id={trace_id}] DingTalk RDS task accepted: "
+            f"session_enabled={session_enabled}, card_enabled={card_enabled}, "
+            f"custom_agent_id_present={bool(custom_agent_id)}, conversation_id_present={bool(conversion_id)}"
+        )
 
         async def send_status(content: str):
-            session_webhook = extract_session_webhook(callback.data, incoming_message)
             if session_webhook:
                 await send_dingtalk_session_webhook(
                     session_webhook,
                     content,
-                    trace_id=incoming_message.message_id or "",
+                    trace_id=trace_id,
                 )
             else:
+                self.logger.warning(f"[trace_id={trace_id}] DingTalk status reply has no sessionWebhook")
                 self.reply_text(content, incoming_message)
         
         # 创建异步任务处理回复
@@ -744,13 +786,39 @@ class CardBotHandler(dingtalk_stream.ChatbotHandler):
 def run_dingtalk_bridge():
     options = define_options()
 
+    logger.info("Starting DingTalk stream bridge")
     client = build_dingtalk_stream_client(options)
     client.start_forever()
 
 
+class ObservableDingTalkStreamClient(dingtalk_stream.DingTalkStreamClient):
+    def open_connection(self):
+        connection = super().open_connection()
+        if connection:
+            logger.info(
+                "DingTalk stream connection opened, endpoint={}, callback_topics={}",
+                connection.get("endpoint", ""),
+                list((getattr(self, "callback_handler_map", {}) or {}).keys()),
+            )
+        else:
+            logger.warning("DingTalk stream open_connection returned empty response")
+        return connection
+
+    async def route_message(self, json_message):
+        headers = json_message.get("headers") or {}
+        logger.info(
+            "DingTalk stream message received: type={}, topic={}, message_id={}, time={}",
+            json_message.get("type", ""),
+            headers.get("topic", ""),
+            headers.get("messageId", ""),
+            headers.get("time", ""),
+        )
+        return await super().route_message(json_message)
+
+
 def build_dingtalk_stream_client(options):
     credential = dingtalk_stream.Credential(options.client_id, options.client_secret)
-    client = dingtalk_stream.DingTalkStreamClient(credential)
+    client = ObservableDingTalkStreamClient(credential)
     for logger_name in ("dingtalk_stream", "dingtalk_stream.client"):
         logging.getLogger(logger_name).setLevel(logging.WARNING)
     client.register_callback_handler(

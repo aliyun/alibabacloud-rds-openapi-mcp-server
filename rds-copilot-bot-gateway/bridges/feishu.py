@@ -59,6 +59,7 @@ MAX_FEISHU_TEXT_LENGTH = 8000
 FEISHU_DOMAIN_URL = "https://open.feishu.cn"
 LARK_DOMAIN_URL = "https://open.larksuite.com"
 FEISHU_TENANT_TOKEN_PATH = "/open-apis/auth/v3/tenant_access_token/internal"
+FEISHU_BOT_INFO_PATH = "/open-apis/bot/v3/info"
 _MARKDOWN_HINT_RE = re.compile(
     r"(^#{1,6}\s)|(^\s*[-*]\s)|(^\s*\d+\.\s)|(^\s*---+\s*$)|(```)|(`[^`\n]+`)|(\*\*[^*\n].+?\*\*)|(~~[^~\n].+?~~)|(<u>.+?</u>)|(\*[^*\n]+\*)|(\[[^\]]+\]\([^)]+\))|(^>\s)",
     re.MULTILINE,
@@ -66,6 +67,8 @@ _MARKDOWN_HINT_RE = re.compile(
 _MARKDOWN_TABLE_RE = re.compile(r"^\|.*\|\n\|[-|: ]+\|", re.MULTILINE)
 _MARKDOWN_FENCE_OPEN_RE = re.compile(r"^```([^\n`]*)\s*$")
 _MARKDOWN_FENCE_CLOSE_RE = re.compile(r"^```\s*$")
+_FEISHU_TEXT_AT_RE = re.compile(r"^(@_user_\d+\s*)+")
+_FEISHU_HTML_AT_RE = re.compile(r'^(<at\s+user_id="[^"]+">.*?</at>\s*)+', re.IGNORECASE)
 
 
 def _load_feishu_message_text(raw_content: str) -> str:
@@ -113,12 +116,161 @@ def validate_feishu_startup(app_id: str = "", app_secret: str = "", domain: str 
         )
 
 
-def _extract_sender_id(sender_id: Any) -> str:
-    return (
-        str(getattr(sender_id, "open_id", "") or "")
-        or str(getattr(sender_id, "user_id", "") or "")
-        or str(getattr(sender_id, "union_id", "") or "")
+def _feishu_domain_url(domain: str = "") -> str:
+    return LARK_DOMAIN_URL if (domain or "feishu").strip().lower() == "lark" else FEISHU_DOMAIN_URL
+
+
+def _fetch_feishu_tenant_access_token(app_id: str, app_secret: str, domain_url: str) -> str:
+    url = f"{domain_url}{FEISHU_TENANT_TOKEN_PATH}"
+    body = json.dumps({"app_id": app_id, "app_secret": app_secret}).encode("utf-8")
+    request = urllib_request.Request(
+        url,
+        data=body,
+        headers={"Content-Type": "application/json; charset=utf-8"},
+        method="POST",
     )
+    with urllib_request.urlopen(request, timeout=10) as response:
+        payload = json.loads(response.read().decode("utf-8") or "{}")
+    code = int(payload.get("code", -1))
+    if code != 0:
+        message = payload.get("msg") or payload.get("message") or "unknown error"
+        raise RuntimeError(f"tenant_access_token failed: {message} (code={code})")
+    return str(payload.get("tenant_access_token", "") or "")
+
+
+def fetch_feishu_bot_info(app_id: str = "", app_secret: str = "", domain: str = "") -> dict[str, Any]:
+    domain_url = _feishu_domain_url(domain)
+    token = _fetch_feishu_tenant_access_token(app_id, app_secret, domain_url)
+    if not token:
+        raise RuntimeError("tenant_access_token is empty")
+    request = urllib_request.Request(
+        f"{domain_url}{FEISHU_BOT_INFO_PATH}",
+        headers={"Authorization": f"Bearer {token}"},
+        method="GET",
+    )
+    with urllib_request.urlopen(request, timeout=10) as response:
+        payload = json.loads(response.read().decode("utf-8") or "{}")
+    code = int(payload.get("code", -1))
+    if code != 0:
+        message = payload.get("msg") or payload.get("message") or "unknown error"
+        raise RuntimeError(f"bot info failed: {message} (code={code})")
+    bot_info = payload.get("bot") or payload.get("data") or {}
+    return bot_info if isinstance(bot_info, dict) else {}
+
+
+def _get_attr_or_item(value: Any, key: str, default: Any = "") -> Any:
+    if isinstance(value, dict):
+        return value.get(key, default)
+    return getattr(value, key, default)
+
+
+def _string_field(value: Any, key: str) -> str:
+    return str(_get_attr_or_item(value, key, "") or "")
+
+
+def _extract_sender_id(sender_id: Any) -> str:
+    return _string_field(sender_id, "open_id") or _string_field(sender_id, "user_id") or _string_field(sender_id, "union_id")
+
+
+def _extract_sender_union_id(sender_id: Any) -> str:
+    return _string_field(sender_id, "union_id")
+
+
+def _iter_feishu_mentions(message: Any) -> list[Any]:
+    mentions = _get_attr_or_item(message, "mentions", []) or []
+    if isinstance(mentions, list):
+        return mentions
+    return list(mentions) if isinstance(mentions, tuple) else []
+
+
+def _collect_mention_tokens(mention: Any) -> set[str]:
+    tokens = {
+        _string_field(mention, "name"),
+        _string_field(mention, "key"),
+        _string_field(mention, "open_id"),
+        _string_field(mention, "user_id"),
+        _string_field(mention, "union_id"),
+    }
+    mention_id = _get_attr_or_item(mention, "id", None)
+    if mention_id:
+        tokens.update(
+            {
+                _string_field(mention_id, "open_id"),
+                _string_field(mention_id, "user_id"),
+                _string_field(mention_id, "union_id"),
+            }
+        )
+    return {token for token in tokens if token}
+
+
+def _configured_feishu_bot_tokens() -> set[str]:
+    tokens = {
+        os.getenv("FEISHU_BOT_OPEN_ID", "").strip(),
+        os.getenv("FEISHU_BOT_USER_ID", "").strip(),
+        os.getenv("FEISHU_BOT_NAME", "").strip(),
+    }
+    return {token for token in tokens if token}
+
+
+def _feishu_bot_tokens_from_info(bot_info: dict[str, Any]) -> set[str]:
+    tokens = {
+        str(bot_info.get("open_id", "") or "").strip(),
+        str(bot_info.get("user_id", "") or "").strip(),
+        str(bot_info.get("app_name", "") or "").strip(),
+        str(bot_info.get("name", "") or "").strip(),
+        str(bot_info.get("bot_name", "") or "").strip(),
+    }
+    return {token for token in tokens if token}
+
+
+def _feishu_requires_mention() -> bool:
+    policy = os.getenv("FEISHU_GROUP_POLICY", "mention").strip().lower()
+    if policy in {"open", "disabled"}:
+        return False
+    require_mention = os.getenv("FEISHU_REQUIRE_MENTION", "").strip().lower()
+    if require_mention in {"0", "false", "no", "off"}:
+        return False
+    return True
+
+
+def _is_message_mentioning_bot(message: Any, text: str, bot_tokens: Optional[set[str]] = None) -> bool:
+    bot_tokens = {token for token in (bot_tokens if bot_tokens is not None else _configured_feishu_bot_tokens()) if token}
+    if not bot_tokens:
+        return False
+    message_text = text or ""
+    lowered_bot_tokens = {token.lower() for token in bot_tokens}
+    if any(token in message_text or token.lower() in message_text.lower() for token in bot_tokens):
+        return True
+    for mention in _iter_feishu_mentions(message):
+        mention_tokens = _collect_mention_tokens(mention)
+        lowered_mention_tokens = {token.lower() for token in mention_tokens}
+        if bot_tokens.intersection(mention_tokens) or lowered_bot_tokens.intersection(lowered_mention_tokens):
+            return True
+    return False
+
+
+def _strip_feishu_leading_mentions(text: str, message: Any) -> str:
+    cleaned = (text or "").strip()
+    mention_tokens = set()
+    for mention in _iter_feishu_mentions(message):
+        mention_tokens.update(
+            {
+                _string_field(mention, "key"),
+                _string_field(mention, "name"),
+            }
+        )
+    mention_tokens = {token for token in mention_tokens if token}
+
+    while cleaned:
+        before = cleaned
+        cleaned = _FEISHU_TEXT_AT_RE.sub("", cleaned).lstrip()
+        cleaned = _FEISHU_HTML_AT_RE.sub("", cleaned).lstrip()
+        for token in sorted(mention_tokens, key=len, reverse=True):
+            if cleaned.startswith(token):
+                cleaned = cleaned[len(token):].lstrip()
+        if cleaned == before:
+            break
+    return cleaned
 
 
 def _build_feishu_markdown_post_payload(content: str) -> str:
@@ -207,6 +359,7 @@ class FeishuBridge:
         self.domain = (domain or os.getenv("FEISHU_DOMAIN", "feishu")).strip().lower()
         self.store = store or get_copilot_conversation_store()
         self.copilot_factory = copilot_factory
+        self.bot_tokens = _configured_feishu_bot_tokens()
         self.client = None
         self.ws_client = None
         self.loop = None
@@ -221,6 +374,7 @@ class FeishuBridge:
             )
 
         self.loop = asyncio.get_running_loop()
+        self._load_bot_identity()
         self.client = self._build_lark_client()
         event_handler = self._build_event_handler()
         self.ws_client = FeishuWSClient(
@@ -242,7 +396,37 @@ class FeishuBridge:
         return domain_builder.build()
 
     def _domain_url(self) -> str:
-        return LARK_DOMAIN_URL if self.domain == "lark" else FEISHU_DOMAIN_URL
+        return _feishu_domain_url(self.domain)
+
+    def _load_bot_identity(self) -> None:
+        if self.bot_tokens:
+            return
+        try:
+            self.bot_tokens = _feishu_bot_tokens_from_info(
+                fetch_feishu_bot_info(app_id=self.app_id, app_secret=self.app_secret, domain=self.domain)
+            )
+        except Exception as e:
+            if _feishu_requires_mention():
+                detail = exception_detail(e)
+                raise RuntimeError(
+                    "无法获取飞书机器人身份：群聊 mention 策略需要识别 @ 的机器人。"
+                    "请检查 FEISHU_APP_ID、FEISHU_APP_SECRET、机器人是否启用，"
+                    "或手动配置 FEISHU_BOT_OPEN_ID / FEISHU_BOT_USER_ID / FEISHU_BOT_NAME。"
+                    f"原始错误：{detail}"
+                ) from e
+            logger.warning("Feishu bot identity loading failed: {}", exception_detail(e))
+            return
+        if not self.bot_tokens and _feishu_requires_mention():
+            raise RuntimeError(
+                "无法获取飞书机器人身份：bot/v3/info 未返回 open_id 或 app_name。"
+                "请手动配置 FEISHU_BOT_OPEN_ID / FEISHU_BOT_USER_ID / FEISHU_BOT_NAME。"
+            )
+        logger.info(
+            "Feishu bot identity loaded: token_count={}, open_id_present={}, name_present={}",
+            len(self.bot_tokens),
+            any(token.startswith("ou_") for token in self.bot_tokens),
+            any(not token.startswith(("ou_", "u_", "on_")) for token in self.bot_tokens),
+        )
 
     def _build_event_handler(self):
         return (
@@ -284,15 +468,18 @@ class FeishuBridge:
             )
             return
 
+        message_text = _load_feishu_message_text(getattr(message, "content", "") or "")
+        query_text = _strip_feishu_leading_mentions(message_text, message)
         await self.handle_text_message(
             chat_id=getattr(message, "chat_id", "") or "",
             sender_id=_extract_sender_id(sender_id_obj),
-            sender_id_alt=str(getattr(sender_id_obj, "union_id", "") or ""),
+            sender_id_alt=_extract_sender_union_id(sender_id_obj),
             sender_name=str(getattr(sender, "sender_type", "") or ""),
             chat_type="group" if str(getattr(message, "chat_type", "") or "").lower() == "group" else "dm",
             is_bot=str(getattr(sender, "sender_type", "") or "").lower() == "bot",
             message_id=getattr(message, "message_id", "") or "",
-            text=_load_feishu_message_text(getattr(message, "content", "") or ""),
+            text=query_text,
+            mentioned=_is_message_mentioning_bot(message, message_text, self.bot_tokens or None),
         )
 
     async def handle_text_message(
@@ -306,6 +493,7 @@ class FeishuBridge:
         is_bot: bool = False,
         message_id: str,
         text: str,
+        mentioned: bool = False,
     ):
         query_text = (text or "").strip()
         source = SessionSource(
@@ -317,8 +505,27 @@ class FeishuBridge:
             user_id_alt=sender_id_alt,
             is_bot=is_bot,
         )
-        if not should_accept_session_source(source, query_text) or not authorize_session_source(source):
-            logger.info("Unauthorized Feishu message ignored: chat_id=%s sender_id=%s", chat_id, sender_id)
+        pre_filter_allowed = should_accept_session_source(source, query_text, mentioned=mentioned)
+        authorized = authorize_session_source(source)
+        logger.info(
+            "Feishu message metadata: chat_id={}, chat_type={}, sender_id={}, sender_id_alt={}, "
+            "is_bot={}, mentioned={}, query_length={}",
+            chat_id,
+            chat_type or "dm",
+            sender_id,
+            sender_id_alt,
+            is_bot,
+            mentioned,
+            len(query_text),
+        )
+        if not pre_filter_allowed or not authorized:
+            logger.info(
+                "Feishu message ignored: chat_id={}, sender_id={}, pre_filter_allowed={}, authorized={}",
+                chat_id,
+                sender_id,
+                pre_filter_allowed,
+                authorized,
+            )
             return
 
         context = BotContext(FEISHU_PLATFORM, chat_id, sender_id, self.store)

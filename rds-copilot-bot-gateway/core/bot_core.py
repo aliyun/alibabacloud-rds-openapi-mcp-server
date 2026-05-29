@@ -216,7 +216,7 @@ def should_accept_session_source(source: SessionSource, text: str = "", *, menti
 
 
 def parse_session_command(text: str) -> str:
-    normalized_text = (text or "").strip()
+    normalized_text = _normalize_command_prefix(text)
     if normalized_text == "/session":
         return "status"
     if normalized_text == "/session on":
@@ -250,6 +250,13 @@ def _normalize_language(language: str) -> str:
     return token if token in SUPPORTED_SKILL_LANGUAGES else ""
 
 
+def _normalize_command_prefix(text: str) -> str:
+    normalized = (text or "").strip()
+    if normalized.startswith("$"):
+        return "/" + normalized[1:]
+    return normalized
+
+
 I18N_MESSAGES = {
     "zh-CN": {
         "help_title": "RDS Copilot 短命令",
@@ -265,6 +272,7 @@ I18N_MESSAGES = {
             ("/tz [IANA timezone]", "查看或切换当前时区。"),
             ("/skills [page]", "查看 Skill 列表。"),
         ],
+        "help_prefix_hint": "提示：短命令支持 `/` 或 `$` 前缀，例如 `/session` 和 `$session` 等价。",
         "invalid_command_argument": "短命令参数不正确：`{command}`。请参考下面的帮助。",
         "no_active_task": "当前没有正在运行的任务。",
         "no_active_task_stop": "当前没有可停止的任务。",
@@ -331,6 +339,7 @@ I18N_MESSAGES = {
             ("/tz [IANA timezone]", "查看或切換目前時區。"),
             ("/skills [page]", "查看 Skill 列表。"),
         ],
+        "help_prefix_hint": "提示：短命令支援 `/` 或 `$` 前綴，例如 `/session` 和 `$session` 等價。",
         "invalid_command_argument": "短命令參數不正確：`{command}`。請參考下面的說明。",
         "no_active_task": "目前沒有正在執行的任務。",
         "no_active_task_stop": "目前沒有可停止的任務。",
@@ -397,6 +406,7 @@ I18N_MESSAGES = {
             ("/tz [IANA timezone]", "View or switch timezone."),
             ("/skills [page]", "List Skills."),
         ],
+        "help_prefix_hint": "Tip: commands support either `/` or `$` prefixes; `/session` and `$session` are equivalent.",
         "invalid_command_argument": "Invalid command argument: `{command}`. See the command help below.",
         "no_active_task": "No active task.",
         "no_active_task_stop": "No active task to stop.",
@@ -463,6 +473,7 @@ I18N_MESSAGES = {
             ("/tz [IANA timezone]", "現在のタイムゾーンを表示または切り替えます。"),
             ("/skills [page]", "Skill 一覧を表示します。"),
         ],
+        "help_prefix_hint": "ヒント: コマンドは `/` または `$` プレフィックスに対応しています。`/session` と `$session` は同じです。",
         "invalid_command_argument": "コマンド引数が正しくありません: `{command}`。以下のヘルプを参照してください。",
         "no_active_task": "実行中のタスクはありません。",
         "no_active_task_stop": "停止できる実行中タスクはありません。",
@@ -614,7 +625,7 @@ def format_unsupported_timezone(timezone: str, language: str = DEFAULT_LANGUAGE)
 
 
 def parse_card_command(text: str) -> str:
-    normalized_text = (text or "").strip()
+    normalized_text = _normalize_command_prefix(text)
     if normalized_text == "/card":
         return "status"
     if normalized_text == "/card on":
@@ -625,7 +636,7 @@ def parse_card_command(text: str) -> str:
 
 
 def is_new_conversation_command(text: str) -> bool:
-    return (text or "").strip().lower() == NEW_CONVERSATION_COMMAND
+    return _normalize_command_prefix(text).lower() == NEW_CONVERSATION_COMMAND
 
 
 def build_error_content(error: Exception, language: str = DEFAULT_LANGUAGE) -> str:
@@ -1215,7 +1226,7 @@ def format_timezone_status(current_timezone: str, language: str = DEFAULT_LANGUA
 
 
 def format_help(language: str = DEFAULT_LANGUAGE) -> str:
-    lines = [f"### {_t(language, 'help_title')}", ""]
+    lines = [f"### {_t(language, 'help_title')}", "", str(_t(language, "help_prefix_hint")), ""]
     for command, description in _t(language, "help_items"):
         lines.append(f"- `{command}` - {description}")
     return "\n".join(lines)
@@ -1281,21 +1292,21 @@ def _get_copilot(rds_copilot: Any) -> Any:
 
 
 def _get_session_checkout_token(text: str) -> str:
-    parts = (text or "").strip().split(maxsplit=1)
+    parts = _normalize_command_prefix(text).split(maxsplit=1)
     if len(parts) == 2 and parts[0] == "/session" and _is_conversation_id_token(parts[1].strip()):
         return parts[1].strip()
     return ""
 
 
 def _get_agent_name(text: str) -> str:
-    parts = (text or "").strip().split(maxsplit=1)
+    parts = _normalize_command_prefix(text).split(maxsplit=1)
     if len(parts) == 2:
         return parts[1].strip()
     return ""
 
 
 def _parse_skills_args(text: str) -> tuple[int, bool]:
-    parts = (text or "").strip().split(maxsplit=1)
+    parts = _normalize_command_prefix(text).split(maxsplit=1)
     if len(parts) == 1:
         return 1, True
     arg = parts[1].strip()
@@ -1305,7 +1316,7 @@ def _parse_skills_args(text: str) -> tuple[int, bool]:
 
 
 def _is_single_argument_command(text: str, command: str) -> bool:
-    parts = (text or "").strip().split(maxsplit=2)
+    parts = _normalize_command_prefix(text).split(maxsplit=2)
     return len(parts) == 2 and parts[0] == command and bool(parts[1].strip())
 
 
@@ -1316,7 +1327,8 @@ async def handle_control_command(
     *,
     card_supported: bool = True,
 ) -> ControlCommandResult:
-    normalized = (text or "").strip()
+    command_text = (text or "").strip()
+    normalized = _normalize_command_prefix(command_text)
     store = context.store
     platform = context.platform
     chat_id = context.chat_id
@@ -1396,7 +1408,7 @@ async def handle_control_command(
             str(_t(language, "card_enabled" if enabled else "card_disabled")),
         )
     if _is_single_argument_command(normalized, "/card"):
-        return ControlCommandResult(True, format_invalid_command(normalized, language))
+        return ControlCommandResult(True, format_invalid_command(command_text, language))
 
     session_command = parse_session_command(normalized)
     if session_command:
@@ -1434,7 +1446,7 @@ async def handle_control_command(
             store.set_session_enabled(chat_id, sender_id, True, platform=platform)
             return ControlCommandResult(True, str(_t(language, "checked_out", conversation_id=conversation_id)))
     if _is_single_argument_command(normalized, "/session"):
-        return ControlCommandResult(True, format_invalid_command(normalized, language))
+        return ControlCommandResult(True, format_invalid_command(command_text, language))
 
     if is_new_conversation_command(normalized):
         store.clear_conversation_id(chat_id, sender_id, platform=platform)
@@ -1466,7 +1478,7 @@ async def handle_control_command(
     if normalized == "/skills" or normalized.startswith("/skills "):
         page_number, valid_skills_command = _parse_skills_args(normalized)
         if not valid_skills_command:
-            return ControlCommandResult(True, format_invalid_command(normalized, language))
+            return ControlCommandResult(True, format_invalid_command(command_text, language))
         data = _get_copilot(rds_copilot).list_skills(
             page_number=page_number,
             page_size=20,

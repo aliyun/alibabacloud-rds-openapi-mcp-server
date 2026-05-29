@@ -575,10 +575,13 @@ class BotCoreCoverageTest(unittest.IsolatedAsyncioTestCase):
         self.assertIn("/help", bot_core.format_help())
         self.assertEqual(await bot_core.maybe_await("value"), "value")
         self.assertEqual(bot_core._get_session_checkout_token("/session abcdef12"), "abcdef12")
+        self.assertEqual(bot_core._get_session_checkout_token("$session abcdef12"), "abcdef12")
         self.assertEqual(bot_core._get_session_checkout_token("/session checkout abc"), "")
         self.assertEqual(bot_core._get_agent_name("/agent Agent Name"), "Agent Name")
+        self.assertEqual(bot_core._get_agent_name("$agent Agent Name"), "Agent Name")
         self.assertEqual(bot_core._get_agent_name("/agent"), "")
         self.assertEqual(bot_core._parse_skills_args("/skills 0"), (1, True))
+        self.assertEqual(bot_core._parse_skills_args("$skills 0"), (1, True))
         self.assertEqual(bot_core._parse_skills_args("/skills en-US"), (1, False))
         self.assertEqual(bot_core._normalize_language("EN_us"), "en-US")
         self.assertEqual(bot_core._normalize_language("zh-cn"), "zh-CN")
@@ -657,7 +660,9 @@ class BotCoreCoverageTest(unittest.IsolatedAsyncioTestCase):
             copilot.list_skills.return_value = {"Data": [{"Name": "sql-review"}], "PageNumber": 2, "TotalCount": 1}
 
             self.assertIn("RDS Copilot commands", (await bot_core.handle_control_command("/help", context, copilot)).content)
+            self.assertIn("RDS Copilot commands", (await bot_core.handle_control_command("$help", context, copilot)).content)
             self.assertIn("No active task", (await bot_core.handle_control_command("/btw", context, copilot)).content)
+            self.assertIn("No active task", (await bot_core.handle_control_command("$btw", context, copilot)).content)
             self.assertIn("No active task to stop", (await bot_core.handle_control_command("/stop", context, copilot)).content)
             empty_state = registry.start(context)
             self.assertIn(
@@ -666,47 +671,71 @@ class BotCoreCoverageTest(unittest.IsolatedAsyncioTestCase):
             )
             registry.finish(empty_state)
             self.assertIn("enabled", (await bot_core.handle_control_command("/card on", context, copilot)).content)
+            self.assertIn("enabled", (await bot_core.handle_control_command("$card on", context, copilot)).content)
             self.assertIn("Card replies: `on`", (await bot_core.handle_control_command("/card", context, copilot)).content)
+            self.assertIn("Card replies: `on`", (await bot_core.handle_control_command("$card", context, copilot)).content)
             invalid_card = await bot_core.handle_control_command("/card status", context, copilot)
+            invalid_dollar_card = await bot_core.handle_control_command("$card status", context, copilot)
             self.assertTrue(invalid_card.handled)
             self.assertIn("Invalid command argument", invalid_card.content)
+            self.assertTrue(invalid_dollar_card.handled)
+            self.assertIn("`$card status`", invalid_dollar_card.content)
             self.assertIn("disabled", (await bot_core.handle_control_command("/card off", context, copilot)).content)
             self.assertIn("enabled", (await bot_core.handle_control_command("/session on", context, copilot)).content)
+            self.assertIn("enabled", (await bot_core.handle_control_command("$session on", context, copilot)).content)
             self.assertIn("Session: `on`", (await bot_core.handle_control_command("/session", context, copilot)).content)
+            self.assertIn("Session: `on`", (await bot_core.handle_control_command("$session", context, copilot)).content)
             invalid_session = await bot_core.handle_control_command("/session status", context, copilot)
+            invalid_dollar_session = await bot_core.handle_control_command("$session status", context, copilot)
             self.assertTrue(invalid_session.handled)
             self.assertIn("Invalid command argument", invalid_session.content)
+            self.assertTrue(invalid_dollar_session.handled)
+            self.assertIn("`$session status`", invalid_dollar_session.content)
             sessions = await bot_core.handle_control_command("/session ls", context, copilot)
             copilot.list_conversations.assert_called_with(limit=10, sort_by="UpdatedAt")
             self.assertLess(sessions.content.index("abcdef12"), sessions.content.index("oldconv1"))
             self.assertNotIn("id=", sessions.content)
             self.assertIn("Conversation", sessions.content)
             self.assertIn("Checked out", (await bot_core.handle_control_command("/session abcdef12", context, copilot)).content)
+            self.assertIn("Checked out", (await bot_core.handle_control_command("$session abcdef12", context, copilot)).content)
             self.assertIn("Checked out", (await bot_core.handle_control_command("/session 01234567-89ab-cdef-0123-456789abcdef", context, copilot)).content)
             self.assertIn("disabled", (await bot_core.handle_control_command("/session off", context, copilot)).content)
+            self.assertIn("disabled", (await bot_core.handle_control_command("$session off", context, copilot)).content)
             self.assertIn("Session: `off`", (await bot_core.handle_control_command("/session", context, copilot)).content)
             self.assertIn("Started a new conversation", (await bot_core.handle_control_command("/new", context, copilot)).content)
+            self.assertIn("Started a new conversation", (await bot_core.handle_control_command("$new", context, copilot)).content)
             self.assertIn("Agent A", (await bot_core.handle_control_command("/agent ls", context, copilot)).content)
+            self.assertIn("Agent A", (await bot_core.handle_control_command("$agent ls", context, copilot)).content)
             self.assertIn("default", (await bot_core.handle_control_command("/agent", context, copilot)).content)
+            self.assertIn("default", (await bot_core.handle_control_command("$agent", context, copilot)).content)
             self.assertIn("Agent not found", (await bot_core.handle_control_command("/agent Missing", context, copilot)).content)
             self.assertIn("selected", (await bot_core.handle_control_command("/agent Agent A", context, copilot)).content)
+            self.assertIn("selected", (await bot_core.handle_control_command("$agent Agent A", context, copilot)).content)
             self.assertIn("Agent A", (await bot_core.handle_control_command("/agent", context, copilot)).content)
             self.assertIn("default", (await bot_core.handle_control_command("/agent default", context, copilot)).content)
+            self.assertIn("default", (await bot_core.handle_control_command("$agent default", context, copilot)).content)
             self.assertIn("言語を `ja-JP`", (await bot_core.handle_control_command("/language JA_jp", context, copilot)).content)
+            self.assertIn("言語を `ja-JP`", (await bot_core.handle_control_command("$language JA_jp", context, copilot)).content)
             self.assertIn("タイムゾーンを `Asia/Tokyo`", (await bot_core.handle_control_command("/tz Asia/Tokyo", context, copilot)).content)
+            self.assertIn("タイムゾーンを `Asia/Tokyo`", (await bot_core.handle_control_command("$tz Asia/Tokyo", context, copilot)).content)
             self.assertIn("未対応の言語", (await bot_core.handle_control_command("/language klingon", context, copilot)).content)
             fuzzy_timezone = await bot_core.handle_control_command("/tz asia/shanghai", context, copilot)
             self.assertIn("未対応のタイムゾーン", fuzzy_timezone.content)
             self.assertIn("Asia/Shanghai", fuzzy_timezone.content)
             self.assertIn("未対応のタイムゾーン", (await bot_core.handle_control_command("/tz Mars/Base", context, copilot)).content)
             self.assertIn("sql-review", (await bot_core.handle_control_command("/skills 2", context, copilot)).content)
+            self.assertIn("sql-review", (await bot_core.handle_control_command("$skills 2", context, copilot)).content)
             copilot.list_skills.assert_called_with(page_number=2, page_size=20, language="ja-JP")
             self.assertIn("コマンド引数が正しくありません", (await bot_core.handle_control_command("/skills ja-JP", context, copilot)).content)
+            self.assertIn("`$skills ja-JP`", (await bot_core.handle_control_command("$skills ja-JP", context, copilot)).content)
             self.assertIn("コマンド引数が正しくありません", (await bot_core.handle_control_command("/skills klingon", context, copilot)).content)
             self.assertIn("コマンド引数が正しくありません", (await bot_core.handle_control_command("/session abc", context, copilot)).content)
+            self.assertIn("`$session abc`", (await bot_core.handle_control_command("$session abc", context, copilot)).content)
             self.assertFalse((await bot_core.handle_control_command("/session normal question", context, copilot)).handled)
+            self.assertFalse((await bot_core.handle_control_command("$session normal question", context, copilot)).handled)
             self.assertFalse((await bot_core.handle_control_command("/session checkout abcdef12", context, copilot)).handled)
             self.assertFalse((await bot_core.handle_control_command("/sql-review select 1", context, copilot)).handled)
+            self.assertFalse((await bot_core.handle_control_command("$sql-review select 1", context, copilot)).handled)
 
             empty_cache_context = bot_core.BotContext("dingtalk", "other", "sender", store, cache=bot_core.RuntimeCache(), registry=registry)
             self.assertIn(
@@ -949,9 +978,11 @@ class FeishuBridgeCoverageTest(unittest.IsolatedAsyncioTestCase):
         ws_instance = SimpleNamespace(start=Mock())
         with patch.object(bridge, "_build_lark_client", return_value=object()) as build_client, \
             patch.object(bridge, "_build_event_handler", return_value=object()) as build_handler, \
+            patch.object(bridge, "_load_bot_identity") as load_bot_identity, \
             patch("bridges.feishu.FeishuWSClient", return_value=ws_instance), \
             patch("bridges.feishu.FEISHU_AVAILABLE", True):
             await bridge.start_forever()
+        load_bot_identity.assert_called_once()
         build_client.assert_called_once()
         build_handler.assert_called_once()
         ws_instance.start.assert_called_once()
@@ -970,6 +1001,7 @@ class FeishuBridgeCoverageTest(unittest.IsolatedAsyncioTestCase):
 
         with patch.object(bridge, "_build_lark_client", return_value=object()), \
             patch.object(bridge, "_build_event_handler", return_value=object()), \
+            patch.object(bridge, "_load_bot_identity"), \
             patch("bridges.feishu.FeishuWSClient", side_effect=lambda **kwargs: LoopSensitiveWsClient(**kwargs)), \
             patch("bridges.feishu.lark_ws_client", fake_ws_module, create=True), \
             patch("bridges.feishu.FEISHU_AVAILABLE", True):
@@ -987,6 +1019,14 @@ class FeishuBridgeCoverageTest(unittest.IsolatedAsyncioTestCase):
         self.assertEqual(feishu_bridge._load_feishu_message_text("[1,2]"), "")
         self.assertEqual(feishu_bridge._extract_sender_id(SimpleNamespace(open_id="", user_id="u", union_id="un")), "u")
         self.assertEqual(feishu_bridge._extract_sender_id(SimpleNamespace(open_id="", user_id="", union_id="un")), "un")
+        self.assertEqual(feishu_bridge._extract_sender_id({"open_id": "ou_dict", "user_id": "u", "union_id": "un"}), "ou_dict")
+        mention_message = SimpleNamespace(mentions=[{"id": {"open_id": "ou_bot_1", "user_id": "u_bot_1"}, "name": "RDS Bot"}])
+        with patch.dict(os.environ, {"FEISHU_BOT_OPEN_ID": "ou_bot_1"}, clear=True):
+            self.assertTrue(feishu_bridge._is_message_mentioning_bot(mention_message, "hello"))
+        with patch.dict(os.environ, {}, clear=True):
+            self.assertFalse(feishu_bridge._is_message_mentioning_bot(mention_message, "hello"))
+        self.assertEqual(feishu_bridge._strip_feishu_leading_mentions("@_user_1 /session", mention_message), "/session")
+        self.assertEqual(feishu_bridge._strip_feishu_leading_mentions("hello @_user_1", mention_message), "hello @_user_1")
         self.assertEqual(feishu_bridge.FeishuBridge(app_id="a", app_secret="s", domain="lark")._domain_url(), feishu_bridge.LARK_DOMAIN_URL)
         self.assertEqual(feishu_bridge.FeishuBridge(app_id="a", app_secret="s", domain="feishu")._domain_url(), feishu_bridge.FEISHU_DOMAIN_URL)
         self.assertEqual(feishu_bridge._build_feishu_markdown_post_rows(""), [[{"tag": "md", "text": ""}]])
@@ -1001,6 +1041,25 @@ class FeishuBridgeCoverageTest(unittest.IsolatedAsyncioTestCase):
         future = Mock()
         future.result.side_effect = RuntimeError("background")
         feishu_bridge.FeishuBridge._log_background_failure(future)
+
+    async def test_load_bot_identity_fetches_tokens_and_fails_loudly_when_mentions_require_it(self):
+        bridge = self.make_bridge()
+        with patch("bridges.feishu.fetch_feishu_bot_info", return_value={"open_id": "ou_bot_1", "app_name": "RDS Bot"}):
+            bridge._load_bot_identity()
+        self.assertIn("ou_bot_1", bridge.bot_tokens)
+        self.assertIn("RDS Bot", bridge.bot_tokens)
+
+        bridge = self.make_bridge()
+        with patch.dict(os.environ, {"FEISHU_GROUP_POLICY": "mention"}, clear=True), \
+            patch("bridges.feishu.fetch_feishu_bot_info", side_effect=RuntimeError("bot info failed")):
+            with self.assertRaisesRegex(RuntimeError, "无法获取飞书机器人身份"):
+                bridge._load_bot_identity()
+
+        bridge = self.make_bridge()
+        with patch.dict(os.environ, {"FEISHU_GROUP_POLICY": "open"}, clear=True), \
+            patch("bridges.feishu.fetch_feishu_bot_info", side_effect=RuntimeError("bot info failed")):
+            bridge._load_bot_identity()
+        self.assertEqual(bridge.bot_tokens, set())
 
     async def test_build_lark_client_event_handler_builders_and_entrypoint(self):
         class ClientBuilder:
@@ -1141,6 +1200,70 @@ class FeishuBridgeCoverageTest(unittest.IsolatedAsyncioTestCase):
         await bridge.handle_message_event_data(data)
         bridge.send_text.assert_awaited_once_with("chat-1", "I can only process text messages.", reply_to_message_id="msg-1")
 
+    async def test_handle_event_data_accepts_group_mentions_and_dict_sender_ids(self):
+        bridge = self.make_bridge()
+        bridge.send_text = AsyncMock(return_value=True)
+        event_data = SimpleNamespace(
+            event=SimpleNamespace(
+                sender=SimpleNamespace(
+                    sender_type="user",
+                    sender_id={"open_id": "ou_user_1", "union_id": "on_user_1"},
+                ),
+                message=SimpleNamespace(
+                    chat_id="oc_group_1",
+                    chat_type="group",
+                    message_id="om_msg_1",
+                    message_type="text",
+                    content=json.dumps({"text": "hello"}),
+                    mentions=[
+                        {
+                            "id": {"open_id": "ou_bot_1", "user_id": "u_bot_1"},
+                            "name": "RDS Bot",
+                        }
+                    ],
+                ),
+            )
+        )
+
+        with patch.dict(os.environ, {"FEISHU_ALLOW_ALL_USERS": "true", "FEISHU_BOT_OPEN_ID": "ou_bot_1"}, clear=True):
+            await bridge.handle_message_event_data(event_data)
+
+        bridge.send_text.assert_awaited_with("oc_group_1", "answer", reply_to_message_id="om_msg_1")
+
+    async def test_group_mention_prefix_is_stripped_before_control_command_matching(self):
+        bridge = self.make_bridge()
+        bridge.bot_tokens = {"ou_bot_1"}
+        bridge.send_text = AsyncMock(return_value=True)
+        event_data = SimpleNamespace(
+            event=SimpleNamespace(
+                sender=SimpleNamespace(
+                    sender_type="user",
+                    sender_id={"open_id": "ou_user_1", "union_id": "on_user_1"},
+                ),
+                message=SimpleNamespace(
+                    chat_id="oc_group_1",
+                    chat_type="group",
+                    message_id="om_msg_1",
+                    message_type="text",
+                    content=json.dumps({"text": "@_user_1 /session"}),
+                    mentions=[
+                        {
+                            "key": "@_user_1",
+                            "id": {"open_id": "ou_bot_1", "user_id": "u_bot_1"},
+                            "name": "RDS Bot",
+                        }
+                    ],
+                ),
+            )
+        )
+
+        with patch.dict(os.environ, {"FEISHU_ALLOW_ALL_USERS": "true"}, clear=True):
+            await bridge.handle_message_event_data(event_data)
+
+        bridge.send_text.assert_awaited_once()
+        self.assertIn("ConversationId", bridge.send_text.await_args.args[1])
+        self.assertNotIn("answer", bridge.send_text.await_args.args[1])
+
     async def test_handle_text_message_no_message_exception_and_reaction_failure_paths(self):
         store = bot_core.CopilotConversationStore("")
         bridge = feishu_bridge.FeishuBridge(
@@ -1243,9 +1366,19 @@ class FeishuBridgeCoverageTest(unittest.IsolatedAsyncioTestCase):
             copilot_factory=lambda: FakeCopilot([MessageEvent("task-1", "conv-1", "answer")]),
         )
         bridge.send_text = AsyncMock(return_value=True)
+        log_messages = []
+        sink_id = feishu_bridge.logger.add(lambda message: log_messages.append(str(message)), level="INFO")
         with patch.dict(os.environ, {}, clear=True):
-            await bridge.handle_text_message(chat_id="chat", sender_id="sender", message_id="msg", text="query")
+            try:
+                await bridge.handle_text_message(chat_id="chat", sender_id="sender", message_id="msg", text="query")
+            finally:
+                feishu_bridge.logger.remove(sink_id)
         bridge.send_text.assert_not_awaited()
+        joined_logs = "\n".join(log_messages)
+        self.assertIn("chat_id=chat", joined_logs)
+        self.assertIn("sender_id=sender", joined_logs)
+        self.assertIn("pre_filter_allowed=", joined_logs)
+        self.assertIn("authorized=", joined_logs)
 
     async def test_send_text_covers_reply_create_rejected_exception_truncate_and_fallback_builders(self):
         class Response:
@@ -2291,10 +2424,17 @@ class DingTalkBridgeCoverageTest(unittest.IsolatedAsyncioTestCase):
             main.validate_selected_bridge_startup(["dingtalk"])
         validate_one.assert_called_once_with("dingtalk")
         self.assertTrue(bot_core.is_new_conversation_command("/new"))
+        self.assertTrue(bot_core.is_new_conversation_command("$new"))
         self.assertEqual(dingtalk_bridge.parse_session_command("/session on"), "on")
+        self.assertEqual(dingtalk_bridge.parse_session_command("$session on"), "on")
         self.assertEqual(dingtalk_bridge.parse_card_command("/card"), "status")
+        self.assertEqual(dingtalk_bridge.parse_card_command("$card"), "status")
         self.assertEqual(dingtalk_bridge.parse_card_command("/card status"), "")
+        self.assertEqual(dingtalk_bridge.parse_card_command("$card status"), "")
         self.assertTrue(dingtalk_bridge.is_new_conversation_command("/new"))
+        self.assertTrue(dingtalk_bridge.is_new_conversation_command("$new"))
+        stream_client = dingtalk_bridge.build_dingtalk_stream_client(SimpleNamespace(client_id="client", client_secret="secret"))
+        self.assertIsInstance(stream_client, dingtalk_bridge.ObservableDingTalkStreamClient)
         self.assertEqual(dingtalk_bridge.convert_json_values_to_string({"a": 1, "b": "x"}), {"a": "1", "b": "x"})
         self.assertEqual(dingtalk_bridge.get_conversation_store_file_path(), bot_core.get_conversation_store_file_path())
         self.assertIn("RDS AI diagnosis failed", dingtalk_bridge.build_error_card_content(RuntimeError("x" * 600), language="en-US"))
@@ -2489,25 +2629,25 @@ class DingTalkBridgeCoverageTest(unittest.IsolatedAsyncioTestCase):
         handler.reply_text.assert_called_with("I can only process text messages.", non_text)
 
         handler = dingtalk_bridge.CardBotHandler(logger=Mock())
-        handler.reply_markdown = Mock(return_value={"ok": True})
         handler.reply_text = Mock()
         command_message = FakeIncomingMessage("/agent ls")
         command_message.session_webhook = "https://hook"
         with tempfile.TemporaryDirectory() as tmp_dir, \
             patch.dict(os.environ, {"RDS_COPILOT_CONVERSATION_STORE_FILE": os.path.join(tmp_dir, "conversations.json"), "GATEWAY_ALLOW_ALL_USERS": "true"}), \
             patch("core.bot_core.RdsCopilot", return_value=FakeCopilot()), \
-            patch("bridges.dingtalk.dingtalk_stream.ChatbotMessage.from_dict", return_value=command_message):
+            patch("bridges.dingtalk.dingtalk_stream.ChatbotMessage.from_dict", return_value=command_message), \
+            patch("bridges.dingtalk.send_dingtalk_session_webhook", new=AsyncMock(return_value=True)) as send_webhook:
             self.assertEqual(await handler.process(callback), (dingtalk_bridge.AckMessage.STATUS_OK, "OK"))
-        handler.reply_markdown.assert_called_once()
-        self.assertIn("###", handler.reply_markdown.call_args.args[1])
+        send_webhook.assert_awaited_once()
+        self.assertIn("###", send_webhook.await_args.args[1])
         handler.reply_text.assert_not_called()
 
         handler = dingtalk_bridge.CardBotHandler(logger=Mock())
-        handler.reply_markdown = Mock(side_effect=RuntimeError("markdown failed"))
         handler.reply_text = Mock(return_value={"ok": True})
         command_message = FakeIncomingMessage("/help")
         command_message.session_webhook = "https://hook"
-        handler.reply_command_content("### Help", command_message)
+        with patch("bridges.dingtalk.send_dingtalk_session_webhook", new=AsyncMock(side_effect=RuntimeError("webhook failed"))):
+            await handler.reply_command_content("### Help", command_message, {"sessionWebhook": "https://hook"})
         handler.reply_text.assert_called_once_with("### Help", command_message)
 
         with tempfile.TemporaryDirectory() as tmp_dir:
@@ -2659,7 +2799,7 @@ class DingTalkBridgeCoverageTest(unittest.IsolatedAsyncioTestCase):
     async def test_run_bridge_entrypoints_are_wired_with_mocks(self):
         with patch("bridges.dingtalk.define_options", return_value=SimpleNamespace(client_id="cid", client_secret="secret")), \
             patch("bridges.dingtalk.dingtalk_stream.Credential", return_value="credential") as credential, \
-            patch("bridges.dingtalk.dingtalk_stream.DingTalkStreamClient") as client_cls, \
+            patch("bridges.dingtalk.ObservableDingTalkStreamClient") as client_cls, \
             patch("bridges.dingtalk.logging.getLogger") as get_logger:
             sdk_logger = get_logger.return_value
             client = client_cls.return_value

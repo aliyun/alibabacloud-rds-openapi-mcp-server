@@ -215,25 +215,42 @@ class LoggingConfigTest(unittest.TestCase):
 class SessionStoreTest(unittest.TestCase):
     def test_session_command_matches_exact_text_only(self):
         self.assertEqual(bot_core.parse_session_command("/session on"), "on")
+        self.assertEqual(bot_core.parse_session_command("$session on"), "on")
         self.assertEqual(bot_core.parse_session_command("  /session off  "), "off")
+        self.assertEqual(bot_core.parse_session_command("  $session off  "), "off")
         self.assertEqual(bot_core.parse_session_command("  /session  "), "status")
+        self.assertEqual(bot_core.parse_session_command("  $session  "), "status")
         self.assertEqual(bot_core.parse_session_command("  /session status  "), "")
+        self.assertEqual(bot_core.parse_session_command("  $session status  "), "")
         self.assertEqual(bot_core.parse_session_command("  /session ls  "), "ls")
+        self.assertEqual(bot_core.parse_session_command("  $session ls  "), "ls")
         self.assertEqual(bot_core.parse_session_command("  /session 60b335ca  "), "checkout")
+        self.assertEqual(bot_core.parse_session_command("  $session 60b335ca  "), "checkout")
         self.assertEqual(bot_core.parse_session_command("  /session 60b335ca-124d-4ee1-864b-de554987abcd  "), "checkout")
+        self.assertEqual(bot_core.parse_session_command("  $session 60b335ca-124d-4ee1-864b-de554987abcd  "), "checkout")
         self.assertEqual(bot_core.parse_session_command("  /session checkout abc123  "), "")
+        self.assertEqual(bot_core.parse_session_command("  $session checkout abc123  "), "")
         self.assertEqual(bot_core.parse_session_command("  /session abc  "), "")
+        self.assertEqual(bot_core.parse_session_command("  $session abc  "), "")
         self.assertEqual(bot_core.parse_session_command("/session  on"), "")
+        self.assertEqual(bot_core.parse_session_command("$session  on"), "")
         self.assertEqual(bot_core.parse_session_command("/session on please"), "")
+        self.assertEqual(bot_core.parse_session_command("$session on please"), "")
         self.assertEqual(bot_core.parse_session_command("How to use /session on?"), "")
 
     def test_card_command_matches_exact_text_only(self):
         self.assertEqual(bot_core.parse_card_command("/card on"), "on")
+        self.assertEqual(bot_core.parse_card_command("$card on"), "on")
         self.assertEqual(bot_core.parse_card_command("  /card off  "), "off")
+        self.assertEqual(bot_core.parse_card_command("  $card off  "), "off")
         self.assertEqual(bot_core.parse_card_command("  /card  "), "status")
+        self.assertEqual(bot_core.parse_card_command("  $card  "), "status")
         self.assertEqual(bot_core.parse_card_command("  /card status  "), "")
+        self.assertEqual(bot_core.parse_card_command("  $card status  "), "")
         self.assertEqual(bot_core.parse_card_command("/card  on"), "")
+        self.assertEqual(bot_core.parse_card_command("$card  on"), "")
         self.assertEqual(bot_core.parse_card_command("/card off please"), "")
+        self.assertEqual(bot_core.parse_card_command("$card off please"), "")
         self.assertEqual(bot_core.parse_card_command("How to use /card off?"), "")
 
     def test_session_is_enabled_by_default(self):
@@ -351,8 +368,10 @@ class BotCoreRuntimeAndCommandTest(unittest.IsolatedAsyncioTestCase):
             context = bot_core.BotContext("dingtalk", "ding-conv-1", "sender-1", store)
 
             result = await bot_core.handle_control_command("/sql-review select 1", context, FakeRpcClient())
+            dollar_result = await bot_core.handle_control_command("$sql-review select 1", context, FakeRpcClient())
 
             self.assertFalse(result.handled)
+            self.assertFalse(dollar_result.handled)
 
     async def test_invalid_single_argument_short_commands_return_help(self):
         with tempfile.TemporaryDirectory() as tmp_dir:
@@ -361,7 +380,9 @@ class BotCoreRuntimeAndCommandTest(unittest.IsolatedAsyncioTestCase):
 
             skills_result = await bot_core.handle_control_command("/skills abc", context, FakeRpcClient())
             session_result = await bot_core.handle_control_command("/session fof", context, FakeRpcClient())
+            dollar_session_result = await bot_core.handle_control_command("$session fof", context, FakeRpcClient())
             card_result = await bot_core.handle_control_command("/card status", context, FakeRpcClient())
+            dollar_card_result = await bot_core.handle_control_command("$card status", context, FakeRpcClient())
             language_result = await bot_core.handle_control_command("/skills en-US", context, FakeRpcClient())
 
             self.assertTrue(skills_result.handled)
@@ -369,8 +390,12 @@ class BotCoreRuntimeAndCommandTest(unittest.IsolatedAsyncioTestCase):
             self.assertIn("### RDS Copilot 短命令", skills_result.content)
             self.assertTrue(session_result.handled)
             self.assertIn("`/session fof`", session_result.content)
+            self.assertTrue(dollar_session_result.handled)
+            self.assertIn("`$session fof`", dollar_session_result.content)
             self.assertTrue(card_result.handled)
             self.assertIn("`/card status`", card_result.content)
+            self.assertTrue(dollar_card_result.handled)
+            self.assertIn("`$card status`", dollar_card_result.content)
             self.assertTrue(language_result.handled)
 
     async def test_session_status_reports_on_and_current_conversation_id(self):
@@ -504,12 +529,14 @@ class BotCoreRuntimeAndCommandTest(unittest.IsolatedAsyncioTestCase):
             default_help = await bot_core.handle_control_command("/help", context, copilot)
             self.assertTrue(default_help.handled)
             self.assertIn("### RDS Copilot 短命令", default_help.content)
+            self.assertIn("`/session` 和 `$session` 等价", default_help.content)
             self.assertIn("- `/session|on|off|ls|<id>`", default_help.content)
             self.assertNotIn("RDS Copilot commands", default_help.content)
 
             english_switch = await bot_core.handle_control_command("/language en-US", context, copilot)
             english_help = await bot_core.handle_control_command("/help", context, copilot)
             self.assertIn("### RDS Copilot commands", english_help.content)
+            self.assertIn("`/session` and `$session` are equivalent", english_help.content)
             self.assertIn("- `/help` - Show command help.", english_help.content)
             self.assertIn("**Language switched to `en-US`.**", english_switch.content)
 
