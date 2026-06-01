@@ -1267,7 +1267,7 @@ def format_conversations(conversations: list[dict], has_more: bool = False, lang
         conversation_id = item.get("Id") or item.get("id") or ""
         name = item.get("Name") or item.get("name") or _t(language, "conversation_untitled")
         updated_at = _format_created_at(_conversation_time_raw(item))
-        lines.append(f"- `{_short_id(conversation_id)}` `{updated_at}` {name}")
+        lines.append(f"- {_short_id(conversation_id)} | {updated_at} | {name}")
     if has_more:
         lines.append(f"\n{_t(language, 'more_conversations')}")
     return "\n".join(lines)
