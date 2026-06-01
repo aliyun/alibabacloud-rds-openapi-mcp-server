@@ -202,8 +202,17 @@ class FactoryStyleCopilot(FakeCopilot):
 
 
 class BotSecurityCoverageTest(unittest.TestCase):
-    def test_session_source_authorization_is_env_driven_and_deny_by_default(self):
-        source = bot_core.SessionSource(
+    def test_session_source_authorization_uses_split_dm_and_group_policy(self):
+        dm_source = bot_core.SessionSource(
+            platform="feishu",
+            chat_id="ou_user_1",
+            chat_type="dm",
+            user_id="ou_user_1",
+            user_name="Alice",
+            thread_id="thread-1",
+            user_id_alt="on_union_1",
+        )
+        group_source = bot_core.SessionSource(
             platform="feishu",
             chat_id="oc_chat_1",
             chat_type="group",
@@ -212,29 +221,106 @@ class BotSecurityCoverageTest(unittest.TestCase):
             thread_id="thread-1",
             user_id_alt="on_union_1",
         )
-        self.assertEqual(source.identity_values(), {"ou_user_1", "on_union_1"})
+        self.assertEqual(dm_source.identity_values(), {"ou_user_1", "on_union_1"})
 
         with patch.dict(os.environ, {}, clear=True):
-            self.assertFalse(bot_core.authorize_session_source(source))
+            self.assertFalse(bot_core.authorize_session_source(dm_source))
+            self.assertFalse(bot_core.authorize_session_source(group_source))
 
-        with patch.dict(os.environ, {"FEISHU_ALLOW_ALL_USERS": "true"}, clear=True):
-            self.assertTrue(bot_core.authorize_session_source(source))
+        with patch.dict(os.environ, {"FEISHU_DM_ALLOW_POLICY": "open"}, clear=True):
+            self.assertTrue(bot_core.authorize_session_source(dm_source))
+            self.assertFalse(bot_core.authorize_session_source(group_source))
 
-        with patch.dict(os.environ, {"FEISHU_ALLOWED_USERS": "on_union_1"}, clear=True):
-            self.assertTrue(bot_core.authorize_session_source(source))
+        with patch.dict(os.environ, {"FEISHU_DM_ALLOW_LIST": "on_union_1"}, clear=True):
+            self.assertTrue(bot_core.authorize_session_source(dm_source))
 
-        with patch.dict(os.environ, {"GATEWAY_ALLOW_ALL_USERS": "1"}, clear=True):
-            self.assertTrue(bot_core.authorize_session_source(source))
+        with patch.dict(os.environ, {"FEISHU_GROUP_ALLOW_LIST": "oc_chat_1"}, clear=True):
+            self.assertFalse(bot_core.authorize_session_source(dm_source))
+            self.assertTrue(bot_core.authorize_session_source(group_source))
 
-        with patch.dict(os.environ, {"GATEWAY_ALLOWED_USERS": "ou_user_1"}, clear=True):
-            self.assertTrue(bot_core.authorize_session_source(source))
+        with patch.dict(os.environ, {"FEISHU_GROUP_ALLOW_POLICY": "disabled", "FEISHU_GROUP_ALLOW_LIST": "oc_chat_1"}, clear=True):
+            self.assertFalse(bot_core.authorize_session_source(group_source))
+
+        with patch.dict(os.environ, {"FEISHU_GROUP_ALLOW_POLICY": "open"}, clear=True):
+            self.assertTrue(bot_core.authorize_session_source(group_source))
+
+    def test_authorization_policy_matrix_for_all_platforms(self):
+        platform_cases = [
+            ("dingtalk", "DINGTALK", "ding-sender-1", "ding-staff-1"),
+            ("feishu", "FEISHU", "ou-user-1", "on-union-1"),
+            ("wecom", "WECOM", "wecom-user-1", ""),
+            ("qqbot", "QQ", "qq-user-1", ""),
+        ]
+
+        for platform, prefix, user_id, user_id_alt in platform_cases:
+            with self.subTest(platform=platform):
+                dm_source = bot_core.SessionSource(
+                    platform=platform,
+                    chat_id=f"{platform}-dm-chat-1",
+                    chat_type="dm",
+                    user_id=user_id,
+                    user_id_alt=user_id_alt,
+                )
+                group_source = bot_core.SessionSource(
+                    platform=platform,
+                    chat_id=f"{platform}-group-chat-1",
+                    chat_type="group",
+                    user_id=user_id,
+                    user_id_alt=user_id_alt,
+                )
+                dm_allow_value = user_id_alt or user_id
+
+                with patch.dict(os.environ, {}, clear=True):
+                    self.assertFalse(bot_core.authorize_session_source(dm_source))
+                    self.assertFalse(bot_core.authorize_session_source(group_source))
+
+                with patch.dict(os.environ, {f"{prefix}_DM_ALLOW_LIST": "someone-else"}, clear=True):
+                    self.assertFalse(bot_core.authorize_session_source(dm_source))
+
+                with patch.dict(os.environ, {f"{prefix}_DM_ALLOW_LIST": dm_allow_value}, clear=True):
+                    self.assertTrue(bot_core.authorize_session_source(dm_source))
+                    self.assertFalse(bot_core.authorize_session_source(group_source))
+
+                with patch.dict(os.environ, {f"{prefix}_GROUP_ALLOW_LIST": group_source.chat_id}, clear=True):
+                    self.assertFalse(bot_core.authorize_session_source(dm_source))
+                    self.assertTrue(bot_core.authorize_session_source(group_source))
+
+                with patch.dict(os.environ, {f"{prefix}_DM_ALLOW_LIST": "*"}, clear=True):
+                    self.assertTrue(bot_core.authorize_session_source(dm_source))
+
+                with patch.dict(os.environ, {f"{prefix}_DM_ALLOW_POLICY": "open"}, clear=True):
+                    self.assertTrue(bot_core.authorize_session_source(dm_source))
+                    self.assertFalse(bot_core.authorize_session_source(group_source))
+
+                with patch.dict(os.environ, {f"{prefix}_GROUP_ALLOW_POLICY": "open"}, clear=True):
+                    self.assertFalse(bot_core.authorize_session_source(dm_source))
+                    self.assertTrue(bot_core.authorize_session_source(group_source))
+
+                with patch.dict(
+                    os.environ,
+                    {
+                        f"{prefix}_DM_ALLOW_POLICY": "disabled",
+                        f"{prefix}_DM_ALLOW_LIST": dm_allow_value,
+                    },
+                    clear=True,
+                ):
+                    self.assertFalse(bot_core.authorize_session_source(dm_source))
+
+                with patch.dict(
+                    os.environ,
+                    {
+                        f"{prefix}_GROUP_ALLOW_POLICY": "disabled",
+                        f"{prefix}_GROUP_ALLOW_LIST": group_source.chat_id,
+                    },
+                    clear=True,
+                ):
+                    self.assertFalse(bot_core.authorize_session_source(group_source))
 
     def test_platform_pre_filters_cover_dingtalk_feishu_wecom_and_qq(self):
         dingtalk_source = bot_core.SessionSource("dingtalk", "ding-chat-1", "group", "ding-user-1")
         with patch.dict(
             os.environ,
             {
-                "DINGTALK_ALLOWED_CHATS": "ding-chat-1",
                 "DINGTALK_REQUIRE_MENTION": "true",
                 "DINGTALK_MENTION_PATTERNS": "@RDS",
             },
@@ -248,17 +334,18 @@ class BotSecurityCoverageTest(unittest.TestCase):
             self.assertFalse(bot_core.should_accept_session_source(feishu_bot, "hello"))
         with patch.dict(os.environ, {"FEISHU_GROUP_POLICY": "open", "FEISHU_ALLOW_BOTS": "true"}, clear=True):
             self.assertTrue(bot_core.should_accept_session_source(feishu_bot, "hello"))
+        feishu_user = bot_core.SessionSource("feishu", "oc_chat_1", "group", "ou_user")
+        with patch.dict(os.environ, {"FEISHU_GROUP_POLICY": "open", "FEISHU_REQUIRE_MENTION": "true"}, clear=True):
+            self.assertTrue(bot_core.should_accept_session_source(feishu_user, "hello"))
+        with patch.dict(os.environ, {"FEISHU_GROUP_POLICY": "mention", "FEISHU_REQUIRE_MENTION": "false"}, clear=True):
+            self.assertFalse(bot_core.should_accept_session_source(feishu_user, "hello"))
 
         wecom_group = bot_core.SessionSource("wecom", "wecom-room-1", "group", "wecom-user-1")
-        with patch.dict(os.environ, {"WECOM_GROUP_POLICY": "disabled"}, clear=True):
-            self.assertFalse(bot_core.should_accept_session_source(wecom_group, "hello"))
-        with patch.dict(os.environ, {"WECOM_GROUP_POLICY": "allowlist", "WECOM_ALLOWED_CHATS": "wecom-room-1"}, clear=True):
+        with patch.dict(os.environ, {"WECOM_GROUP_ALLOW_POLICY": "disabled"}, clear=True):
             self.assertTrue(bot_core.should_accept_session_source(wecom_group, "hello"))
 
         qq_group = bot_core.SessionSource("qqbot", "qq-group-1", "group", "qq-user-1")
-        with patch.dict(os.environ, {"QQ_GROUP_ALLOWED_USERS": "qq-group-2"}, clear=True):
-            self.assertFalse(bot_core.should_accept_session_source(qq_group, "hello"))
-        with patch.dict(os.environ, {"QQ_GROUP_ALLOWED_USERS": "qq-group-1"}, clear=True):
+        with patch.dict(os.environ, {"QQ_GROUP_ALLOW_POLICY": "disabled"}, clear=True):
             self.assertTrue(bot_core.should_accept_session_source(qq_group, "hello"))
 
         with patch.dict(os.environ, {"DINGTALK_REQUIRE_MENTION": "true", "DINGTALK_FREE_RESPONSE_CHATS": "ding-chat-1"}, clear=True):
@@ -267,27 +354,56 @@ class BotSecurityCoverageTest(unittest.TestCase):
             self.assertFalse(bot_core.should_accept_session_source(bot_core.SessionSource("feishu", "chat", "group", "user"), "hello"))
         with patch.dict(os.environ, {"FEISHU_BOT_NAME": "RDSBot"}, clear=True):
             self.assertTrue(bot_core.should_accept_session_source(bot_core.SessionSource("feishu", "chat", "group", "user"), "@RDSBot hello"))
-        with patch.dict(os.environ, {"WECOM_DM_POLICY": "disabled"}, clear=True):
-            self.assertFalse(bot_core.should_accept_session_source(bot_core.SessionSource("wecom", "user", "dm", "user"), "hello"))
-        with patch.dict(os.environ, {"WECOM_DM_POLICY": "allowlist", "WECOM_ALLOWED_USERS": "wecom-user-1"}, clear=True):
-            self.assertTrue(bot_core.should_accept_session_source(bot_core.SessionSource("wecom", "user", "dm", "wecom-user-1"), "hello"))
-        with patch.dict(os.environ, {"QQ_GROUP_POLICY": "disabled"}, clear=True):
-            self.assertFalse(bot_core.should_accept_session_source(qq_group, "hello"))
-        with patch.dict(os.environ, {"QQ_DM_POLICY": "disabled"}, clear=True):
-            self.assertFalse(bot_core.should_accept_session_source(bot_core.SessionSource("qqbot", "user", "dm", "user"), "hello"))
+        with patch.dict(os.environ, {"WECOM_DM_ALLOW_POLICY": "disabled", "QQ_DM_ALLOW_POLICY": "disabled"}, clear=True):
+            self.assertTrue(bot_core.should_accept_session_source(bot_core.SessionSource("wecom", "user", "dm", "user"), "hello"))
+            self.assertTrue(bot_core.should_accept_session_source(bot_core.SessionSource("qqbot", "user", "dm", "user"), "hello"))
         self.assertTrue(bot_core.should_accept_session_source(bot_core.SessionSource("other", "chat", "dm", "user"), "hello"))
 
-    def test_security_and_preference_helpers_cover_edge_branches(self):
-        with patch.dict(os.environ, {"DINGTALK_ALLOWED_USERS": "*"}, clear=True):
-            self.assertTrue(bot_core.authorize_session_source(bot_core.SessionSource("dingtalk", "chat", "dm", "user-1")))
+    def test_security_policy_helpers_cover_edge_branches_and_ignore_old_env(self):
+        source = bot_core.SessionSource("dingtalk", "chat", "dm", "user-1", user_id_alt="staff-1")
+        with patch.dict(os.environ, {"DINGTALK_DM_ALLOW_LIST": "*"}, clear=True):
+            self.assertTrue(bot_core.authorize_session_source(source))
+        with patch.dict(os.environ, {"DINGTALK_ALLOWED_USERS": "*", "GATEWAY_ALLOW_ALL_USERS": "true"}, clear=True):
+            self.assertFalse(bot_core.authorize_session_source(source))
+        with patch.dict(os.environ, {"DINGTALK_DM_ALLOW_POLICY": "invalid"}, clear=True):
+            self.assertFalse(bot_core.authorize_session_source(source))
         with patch.dict(os.environ, {}, clear=True):
             self.assertFalse(bot_core.authorize_session_source(bot_core.SessionSource("dingtalk", "chat", "dm", "")))
-        with patch.dict(os.environ, {"DINGTALK_ALLOWED_CHATS": "other-chat"}, clear=True):
-            self.assertFalse(bot_core.should_accept_session_source(bot_core.SessionSource("dingtalk", "chat", "group", "user-1"), "hello"))
         with patch.dict(os.environ, {"DINGTALK_REQUIRE_MENTION": "true"}, clear=True):
             self.assertFalse(bot_core.should_accept_session_source(bot_core.SessionSource("dingtalk", "chat", "group", "user-1"), "hello"))
         with patch.dict(os.environ, {}, clear=True):
             self.assertTrue(bot_core.should_accept_session_source(bot_core.SessionSource("wecom", "user-1", "dm", "user-1"), "hello"))
+
+    def test_identity_command_formats_source_ids_and_config_snippet(self):
+        source = bot_core.SessionSource(
+            "dingtalk",
+            "cid-group-1",
+            "group",
+            "sender-1",
+            user_name="WenFeng",
+            user_id_alt="staff-1",
+        )
+
+        self.assertTrue(bot_core.is_identity_command("/myid"))
+        self.assertTrue(bot_core.is_identity_command("$myid"))
+
+        content = bot_core.format_identity_source(source, "zh-CN")
+
+        self.assertIn("平台", content)
+        self.assertIn("`dingtalk`", content)
+        self.assertIn("`cid-group-1`", content)
+        self.assertIn("`staff-1`", content)
+        self.assertNotIn("`sender-1`", content)
+        self.assertNotIn("备用用户 ID", content)
+        self.assertIn("DINGTALK_GROUP_ALLOW_POLICY=allowlist", content)
+        self.assertIn("DINGTALK_GROUP_ALLOW_LIST=cid-group-1", content)
+
+        fallback_content = bot_core.format_identity_source(
+            bot_core.SessionSource("dingtalk", "cid-group-1", "group", "sender-1"),
+            "zh-CN",
+        )
+        self.assertIn("`sender-1`", fallback_content)
+        self.assertNotIn("备用用户 ID", fallback_content)
 
         with tempfile.TemporaryDirectory() as tmp_dir:
             store = bot_core.CopilotConversationStore(os.path.join(tmp_dir, "conversations.json"))
@@ -517,6 +633,7 @@ class BotCoreCoverageTest(unittest.IsolatedAsyncioTestCase):
             store.set("chat", "sender", "conv-feishu", platform="feishu")
             self.assertEqual(store.get("chat", "sender", platform="dingtalk"), "conv-ding")
             self.assertEqual(store.get("chat", "sender", platform="feishu"), "conv-feishu")
+            self.assertEqual(store.get("chat", "sender"), "")
 
             with open(store_path, "w", encoding="utf-8") as f:
                 f.write("{bad json")
@@ -936,7 +1053,7 @@ class BotCoreCoverageTest(unittest.IsolatedAsyncioTestCase):
 
 class FeishuBridgeCoverageTest(unittest.IsolatedAsyncioTestCase):
     def setUp(self):
-        self.env_patcher = patch.dict(os.environ, {"GATEWAY_ALLOW_ALL_USERS": "true"})
+        self.env_patcher = patch.dict(os.environ, {"FEISHU_DM_ALLOW_POLICY": "open", "FEISHU_GROUP_ALLOW_POLICY": "open"})
         self.env_patcher.start()
 
     def tearDown(self):
@@ -949,6 +1066,23 @@ class FeishuBridgeCoverageTest(unittest.IsolatedAsyncioTestCase):
             store=store or bot_core.CopilotConversationStore(""),
             copilot_factory=lambda: FakeCopilot([MessageEvent("task-1", "conv-1", "answer")]),
         )
+
+    async def test_myid_command_bypasses_authorization(self):
+        bridge = self.make_bridge()
+        bridge.send_text = AsyncMock(return_value=True)
+        with patch.dict(os.environ, {}, clear=True):
+            await bridge.handle_text_message(
+                chat_id="oc_chat_1",
+                sender_id="ou_user_1",
+                sender_id_alt="on_union_1",
+                message_id="om_msg_1",
+                text="/myid",
+            )
+
+        bridge.send_text.assert_awaited_once()
+        content = bridge.send_text.await_args.args[1]
+        self.assertIn("FEISHU_DM_ALLOW_POLICY=allowlist", content)
+        self.assertIn("FEISHU_DM_ALLOW_LIST=ou_user_1", content)
 
     async def test_start_forever_validates_sdk_and_credentials_then_builds_clients(self):
         bridge = self.make_bridge()
@@ -1223,7 +1357,7 @@ class FeishuBridgeCoverageTest(unittest.IsolatedAsyncioTestCase):
                 message=SimpleNamespace(chat_id="chat-1", message_id="msg-1", message_type="image", content="{}"),
             )
         )
-        with patch.dict(os.environ, {"FEISHU_ALLOWED_USERS": "ou_1"}, clear=True):
+        with patch.dict(os.environ, {"FEISHU_DM_ALLOW_LIST": "ou_1"}, clear=True):
             await bridge.handle_message_event_data(data)
         bridge.send_text.assert_awaited_once_with(
             "chat-1",
@@ -1272,7 +1406,7 @@ class FeishuBridgeCoverageTest(unittest.IsolatedAsyncioTestCase):
             )
         )
 
-        with patch.dict(os.environ, {"FEISHU_ALLOW_ALL_USERS": "true", "FEISHU_BOT_OPEN_ID": "ou_bot_1"}, clear=True):
+        with patch.dict(os.environ, {"FEISHU_GROUP_ALLOW_LIST": "oc_group_1", "FEISHU_BOT_OPEN_ID": "ou_bot_1"}, clear=True):
             await bridge.handle_message_event_data(event_data)
 
         bridge.send_text.assert_awaited_with(
@@ -1315,7 +1449,7 @@ class FeishuBridgeCoverageTest(unittest.IsolatedAsyncioTestCase):
             )
         )
 
-        with patch.dict(os.environ, {"FEISHU_ALLOW_ALL_USERS": "true"}, clear=True):
+        with patch.dict(os.environ, {"FEISHU_GROUP_ALLOW_LIST": "oc_group_1"}, clear=True):
             await bridge.handle_message_event_data(event_data)
 
         bridge.send_text.assert_awaited_once()
@@ -1588,6 +1722,35 @@ class FeishuBridgeCoverageTest(unittest.IsolatedAsyncioTestCase):
 
 
 class WeComBridgeCoverageTest(unittest.IsolatedAsyncioTestCase):
+    async def test_myid_command_bypasses_authorization(self):
+        bridge = wecom_bridge.WeComBridge(
+            bot_id="bot",
+            secret="secret",
+            store=bot_core.CopilotConversationStore(""),
+        )
+        frames = []
+        bridge._send_frame = AsyncMock(side_effect=lambda frame: frames.append(frame) or True)
+        payload = {
+            "cmd": wecom_bridge.APP_CMD_CALLBACK,
+            "headers": {"req_id": "req-1"},
+            "body": {
+                "msgid": "msg-1",
+                "chatid": "room-1",
+                "chattype": "group",
+                "from": {"userid": "user-1", "name": "User One"},
+                "msgtype": "text",
+                "text": {"content": "/myid"},
+            },
+        }
+
+        with patch.dict(os.environ, {}, clear=True):
+            await bridge.handle_payload(payload)
+
+        self.assertEqual(len(frames), 1)
+        content = frames[0]["body"]["markdown"]["content"]
+        self.assertIn("WECOM_GROUP_ALLOW_POLICY=allowlist", content)
+        self.assertIn("WECOM_GROUP_ALLOW_LIST=room-1", content)
+
     async def test_wecom_extracts_source_checks_auth_and_replies(self):
         store = bot_core.CopilotConversationStore("")
         fake_copilot = FakeCopilot([MessageEvent("task-1", "conv-1", "wecom answer")])
@@ -1617,7 +1780,7 @@ class WeComBridgeCoverageTest(unittest.IsolatedAsyncioTestCase):
             await bridge.handle_payload(payload)
         self.assertEqual(sent, [])
 
-        with patch.dict(os.environ, {"WECOM_ALLOWED_USERS": "user-1"}, clear=True):
+        with patch.dict(os.environ, {"WECOM_GROUP_ALLOW_LIST": "room-1"}, clear=True):
             await bridge.handle_payload(payload)
 
         self.assertEqual(fake_copilot.chat_calls[0][0], "query")
@@ -1933,7 +2096,7 @@ class WeComBridgeCoverageTest(unittest.IsolatedAsyncioTestCase):
 
         sent = []
         bridge._send_frame = AsyncMock(side_effect=lambda frame: sent.append(frame) or True)
-        with patch.dict(os.environ, {"WECOM_ALLOWED_USERS": "user-1"}, clear=True):
+        with patch.dict(os.environ, {"WECOM_GROUP_ALLOW_LIST": "room-1"}, clear=True):
             await bridge.handle_payload({"cmd": "ignored", "body": {}})
             await bridge.handle_payload(
                 {
@@ -2048,12 +2211,27 @@ class WeComBridgeCoverageTest(unittest.IsolatedAsyncioTestCase):
 
 
 class QQBridgeCoverageTest(unittest.IsolatedAsyncioTestCase):
-    def setUp(self):
-        self.qq_env_patcher = patch.dict(os.environ, {"QQ_HTTP_VERIFY": "true"})
-        self.qq_env_patcher.start()
+    async def test_myid_command_bypasses_authorization(self):
+        bridge = qq_bridge.QQBridge(
+            app_id="app-1",
+            client_secret="secret-1",
+            store=bot_core.CopilotConversationStore(""),
+        )
+        bodies = []
+        bridge._api_request = AsyncMock(side_effect=lambda method, path, body=None: bodies.append(body or {}) or {"id": "sent-1"})
+        c2c = {
+            "id": "msg-1",
+            "content": "$myid",
+            "author": {"user_openid": "user-openid-1"},
+        }
 
-    def tearDown(self):
-        self.qq_env_patcher.stop()
+        with patch.dict(os.environ, {}, clear=True):
+            await bridge.handle_event("C2C_MESSAGE_CREATE", c2c)
+
+        self.assertEqual(len(bodies), 1)
+        content = bodies[0]["markdown"]["content"]
+        self.assertIn("QQ_DM_ALLOW_POLICY=allowlist", content)
+        self.assertIn("QQ_DM_ALLOW_LIST=user-openid-1", content)
 
     async def test_qq_normalizes_events_checks_auth_and_routes_reply(self):
         fake_copilot = FakeCopilot([MessageEvent("task-1", "conv-1", "qq answer")])
@@ -2074,7 +2252,7 @@ class QQBridgeCoverageTest(unittest.IsolatedAsyncioTestCase):
             await bridge.handle_event("C2C_MESSAGE_CREATE", c2c)
         bridge._api_request.assert_not_awaited()
 
-        with patch.dict(os.environ, {"QQ_ALLOWED_USERS": "user-openid-1"}, clear=True):
+        with patch.dict(os.environ, {"QQ_DM_ALLOW_LIST": "user-openid-1"}, clear=True):
             await bridge.handle_event("C2C_MESSAGE_CREATE", c2c)
         bridge._api_request.assert_awaited_with(
             "POST",
@@ -2089,7 +2267,7 @@ class QQBridgeCoverageTest(unittest.IsolatedAsyncioTestCase):
             "content": "<@!bot> group query",
             "author": {"member_openid": "member-openid-1"},
         }
-        with patch.dict(os.environ, {"QQ_ALLOWED_USERS": "member-openid-1", "QQ_GROUP_ALLOWED_USERS": "group-openid-1"}, clear=True):
+        with patch.dict(os.environ, {"QQ_GROUP_ALLOW_LIST": "group-openid-1"}, clear=True):
             await bridge.handle_event("GROUP_AT_MESSAGE_CREATE", group)
         bridge._api_request.assert_awaited_with(
             "POST",
@@ -2155,13 +2333,6 @@ class QQBridgeCoverageTest(unittest.IsolatedAsyncioTestCase):
     async def test_qq_helpers_gateway_control_busy_error_and_send_branches(self):
         with patch.dict(os.environ, {"QQ_RECONNECT_BASE_SECONDS": "bad", "QQ_RECONNECT_MAX_SECONDS": "2"}, clear=True):
             self.assertEqual(qq_bridge._calculate_reconnect_delay(2), 2)
-        with patch.dict(os.environ, {"QQ_HTTP_VERIFY": "off"}, clear=True):
-            self.assertFalse(qq_bridge._read_bool_env("QQ_HTTP_VERIFY"))
-        with patch.dict(os.environ, {"QQ_HTTP_VERIFY": "off"}, clear=True):
-            with self.assertRaisesRegex(RuntimeError, "QQ_HTTP_VERIFY=false"):
-                qq_bridge.QQBridge(app_id="app", client_secret="secret")
-        with patch.dict(os.environ, {"QQ_HTTP_VERIFY": "off", "RDS_BOT_ENV": "dev"}, clear=True):
-            self.assertFalse(qq_bridge.QQBridge(app_id="app", client_secret="secret").tls_verify)
 
         guild_source, guild_text = qq_bridge.source_and_text_from_qq_event(
             "GUILD_MESSAGE_CREATE",
@@ -2324,8 +2495,7 @@ class QQBridgeCoverageTest(unittest.IsolatedAsyncioTestCase):
 
         close_ws = FakeWebSocket([SimpleNamespace(type=qq_bridge.aiohttp.WSMsgType.CLOSED)])
         session = FakeSession(close_ws)
-        with patch.dict(os.environ, {"QQ_HTTP_VERIFY": "true"}, clear=True):
-            connect_once = qq_bridge.QQBridge(app_id="app", client_secret="secret", store=bot_core.CopilotConversationStore(""))
+        connect_once = qq_bridge.QQBridge(app_id="app", client_secret="secret", store=bot_core.CopilotConversationStore(""))
         connect_once._running = True
         connect_once.get_gateway_url = AsyncMock(return_value="wss://gateway.qq")
         qq_logs = []
@@ -2340,17 +2510,6 @@ class QQBridgeCoverageTest(unittest.IsolatedAsyncioTestCase):
         self.assertEqual(session.ws_connect_kwargs, ("wss://gateway.qq", {}))
         self.assertTrue(close_ws.closed)
         self.assertTrue(session.closed)
-
-        no_verify_ws = FakeWebSocket([SimpleNamespace(type=qq_bridge.aiohttp.WSMsgType.CLOSED)])
-        no_verify_session = FakeSession(no_verify_ws)
-        with patch.dict(os.environ, {"QQ_HTTP_VERIFY": "false", "RDS_BOT_ENV": "dev"}, clear=True):
-            no_verify_bridge = qq_bridge.QQBridge(app_id="app", client_secret="secret", store=bot_core.CopilotConversationStore(""))
-        no_verify_bridge._running = True
-        no_verify_bridge.get_gateway_url = AsyncMock(return_value="wss://gateway.qq")
-        with patch("bridges.qq.aiohttp.ClientSession", return_value=no_verify_session):
-            with self.assertRaisesRegex(RuntimeError, "websocket closed"):
-                await no_verify_bridge._connect_once()
-        self.assertEqual(no_verify_session.ws_connect_kwargs, ("wss://gateway.qq", {"ssl": False}))
 
         hello_then_close_ws = FakeWebSocket(
             [
@@ -2461,12 +2620,13 @@ class BridgeFactoryControlCommandRegressionTest(unittest.IsolatedAsyncioTestCase
             copilot_factory=FactoryStyleCopilot,
         )
         feishu.send_text = AsyncMock(return_value=True)
-        await feishu.handle_text_message(
-            chat_id="feishu-chat",
-            sender_id="feishu-user",
-            message_id="feishu-message",
-            text="/agent ls",
-        )
+        with patch.dict(os.environ, {"FEISHU_DM_ALLOW_POLICY": "open"}, clear=True):
+            await feishu.handle_text_message(
+                chat_id="feishu-chat",
+                sender_id="feishu-user",
+                message_id="feishu-message",
+                text="/agent ls",
+            )
         self.assertIn("Factory Agent", feishu.send_text.await_args.args[1])
 
         wecom = wecom_bridge.WeComBridge(
@@ -2476,35 +2636,52 @@ class BridgeFactoryControlCommandRegressionTest(unittest.IsolatedAsyncioTestCase
             copilot_factory=FactoryStyleCopilot,
         )
         wecom.send_text = AsyncMock(return_value=True)
-        await wecom.handle_text_message(
-            source=bot_core.SessionSource("wecom", "wecom-chat", "dm", "wecom-user"),
-            text="/skills",
-            reply_req_id="req-1",
-        )
+        with patch.dict(os.environ, {"WECOM_DM_ALLOW_POLICY": "open"}, clear=True):
+            await wecom.handle_text_message(
+                source=bot_core.SessionSource("wecom", "wecom-chat", "dm", "wecom-user"),
+                text="/skills",
+                reply_req_id="req-1",
+            )
         self.assertIn("factory-skill", wecom.send_text.await_args.args[1])
 
-        with patch.dict(os.environ, {"QQ_HTTP_VERIFY": "true"}):
-            qq = qq_bridge.QQBridge(
-                app_id="app",
-                client_secret="secret",
-                store=bot_core.CopilotConversationStore(""),
-                copilot_factory=FactoryStyleCopilot,
-            )
-        qq.send_text = AsyncMock(return_value=True)
-        await qq.handle_text_message(
-            source=bot_core.SessionSource("qqbot", "qq-chat", "dm", "qq-user"),
-            text="/session ls",
+        qq = qq_bridge.QQBridge(
+            app_id="app",
+            client_secret="secret",
+            store=bot_core.CopilotConversationStore(""),
+            copilot_factory=FactoryStyleCopilot,
         )
+        qq.send_text = AsyncMock(return_value=True)
+        with patch.dict(os.environ, {"QQ_DM_ALLOW_POLICY": "open"}, clear=True):
+            await qq.handle_text_message(
+                source=bot_core.SessionSource("qqbot", "qq-chat", "dm", "qq-user"),
+                text="/session ls",
+            )
         self.assertIn("Factory Conversation", qq.send_text.await_args.args[1])
 
 
 class DingTalkBridgeCoverageTest(unittest.IsolatedAsyncioTestCase):
     def setUp(self):
-        self.env_patcher = patch.dict(os.environ, {"GATEWAY_ALLOW_ALL_USERS": "true"})
+        self.env_patcher = patch.dict(os.environ, {"DINGTALK_DM_ALLOW_POLICY": "open", "DINGTALK_GROUP_ALLOW_POLICY": "open"})
         self.env_patcher.start()
 
     def tearDown(self):
         self.env_patcher.stop()
+
+    async def test_myid_command_bypasses_authorization(self):
+        handler = dingtalk_bridge.CardBotHandler(logger=Mock())
+        handler.reply_text = Mock(return_value={"ok": True})
+        incoming = FakeIncomingMessage("/myid")
+        callback = SimpleNamespace(data={})
+
+        with tempfile.TemporaryDirectory() as tmp_dir, \
+            patch.dict(os.environ, {"RDS_COPILOT_CONVERSATION_STORE_FILE": os.path.join(tmp_dir, "conversations.json")}, clear=True), \
+            patch("bridges.dingtalk.dingtalk_stream.ChatbotMessage.from_dict", return_value=incoming):
+            self.assertEqual(await handler.process(callback), (dingtalk_bridge.AckMessage.STATUS_OK, "OK"))
+
+        handler.reply_text.assert_called_once()
+        content = handler.reply_text.call_args.args[0]
+        self.assertIn("DINGTALK_GROUP_ALLOW_POLICY=allowlist", content)
+        self.assertIn("DINGTALK_GROUP_ALLOW_LIST=ding-conv-1", content)
 
     async def test_dingtalk_bridge_is_split_out_of_main_entrypoint(self):
         dingtalk_bridge = importlib.import_module("bridges.dingtalk")
@@ -2568,13 +2745,18 @@ class DingTalkBridgeCoverageTest(unittest.IsolatedAsyncioTestCase):
             "ACCESS_SECRET": "sk",
             "DINGTALK_APP_CLIENT_ID": "ding-id",
             "DINGTALK_APP_CLIENT_SECRET": "ding-secret",
-            "DINGTALK_ALLOW_ALL_USERS": "true",
             "FEISHU_APP_ID": "feishu-id",
             "FEISHU_APP_SECRET": "feishu-secret",
-            "FEISHU_ALLOW_ALL_USERS": "true",
         }
         with patch.dict(os.environ, valid_env, clear=True):
             main.validate_startup_environment(["dingtalk", "feishu"])
+        invalid_policy_env = {
+            **valid_env,
+            "DINGTALK_DM_ALLOW_POLICY": "everyone",
+        }
+        with patch.dict(os.environ, invalid_policy_env, clear=True):
+            with self.assertRaisesRegex(main.EnvironmentConfigurationError, "DINGTALK_DM_ALLOW_POLICY"):
+                main.validate_startup_environment(["dingtalk"])
         with patch("bridges.dingtalk.validate_dingtalk_startup") as validate_ding, \
             patch("bridges.feishu.validate_feishu_startup") as validate_feishu, \
             patch("bridges.wecom.validate_wecom_startup") as validate_wecom, \
@@ -2840,7 +3022,7 @@ class DingTalkBridgeCoverageTest(unittest.IsolatedAsyncioTestCase):
         command_message = FakeIncomingMessage("/agent ls")
         command_message.session_webhook = "https://hook"
         with tempfile.TemporaryDirectory() as tmp_dir, \
-            patch.dict(os.environ, {"RDS_COPILOT_CONVERSATION_STORE_FILE": os.path.join(tmp_dir, "conversations.json"), "GATEWAY_ALLOW_ALL_USERS": "true"}), \
+            patch.dict(os.environ, {"RDS_COPILOT_CONVERSATION_STORE_FILE": os.path.join(tmp_dir, "conversations.json"), "DINGTALK_GROUP_ALLOW_POLICY": "open"}), \
             patch("core.bot_core.RdsCopilot", return_value=FakeCopilot()), \
             patch("bridges.dingtalk.dingtalk_stream.ChatbotMessage.from_dict", return_value=command_message), \
             patch("bridges.dingtalk.send_dingtalk_session_webhook", new=AsyncMock(return_value=True)) as send_webhook:
@@ -2867,7 +3049,7 @@ class DingTalkBridgeCoverageTest(unittest.IsolatedAsyncioTestCase):
         )
         single_command_message.session_webhook = "https://hook"
         with tempfile.TemporaryDirectory() as tmp_dir, \
-            patch.dict(os.environ, {"RDS_COPILOT_CONVERSATION_STORE_FILE": os.path.join(tmp_dir, "conversations.json"), "GATEWAY_ALLOW_ALL_USERS": "true"}), \
+            patch.dict(os.environ, {"RDS_COPILOT_CONVERSATION_STORE_FILE": os.path.join(tmp_dir, "conversations.json"), "DINGTALK_DM_ALLOW_POLICY": "open"}), \
             patch("bridges.dingtalk.dingtalk_stream.ChatbotMessage.from_dict", return_value=single_command_message), \
             patch("bridges.dingtalk.send_dingtalk_session_webhook", new=AsyncMock(return_value=True)) as send_webhook:
             self.assertEqual(await handler.process(callback), (dingtalk_bridge.AckMessage.STATUS_OK, "OK"))
@@ -2900,7 +3082,7 @@ class DingTalkBridgeCoverageTest(unittest.IsolatedAsyncioTestCase):
             stop_copilot = FakeCopilot()
             handler = dingtalk_bridge.CardBotHandler(logger=Mock())
             handler.reply_text = Mock()
-            with patch.dict(os.environ, {"RDS_COPILOT_CONVERSATION_STORE_FILE": store_path, "GATEWAY_ALLOW_ALL_USERS": "true"}), \
+            with patch.dict(os.environ, {"RDS_COPILOT_CONVERSATION_STORE_FILE": store_path, "DINGTALK_GROUP_ALLOW_POLICY": "open"}), \
                 patch("core.bot_core.get_active_registry", return_value=registry), \
                 patch("core.bot_core.RdsCopilot", return_value=stop_copilot), \
                 patch("bridges.dingtalk.dingtalk_stream.ChatbotMessage.from_dict", return_value=FakeIncomingMessage("/stop")):
@@ -2941,7 +3123,7 @@ class DingTalkBridgeCoverageTest(unittest.IsolatedAsyncioTestCase):
                     callback = SimpleNamespace(data=callback_data)
                     status = await handler.process(callback)
                     await asyncio.gather(*created_tasks, return_exceptions=True)
-                stored_conversation_id = store.get("ding-conv-1", "sender-1")
+                stored_conversation_id = store.get("ding-conv-1", "sender-1", platform="dingtalk")
                 return status, stored_conversation_id, handler, card_reply, plain_reply, send_webhook
 
         status, stored_conversation_id, handler, card_reply, plain_reply, _ = await run_process(True, {})

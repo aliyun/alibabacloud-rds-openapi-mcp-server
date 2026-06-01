@@ -692,8 +692,6 @@ class CardBotHandler(dingtalk_stream.ChatbotHandler):
         is_in_at_list = bool(getattr(incoming_message, "is_in_at_list", False))
         if not is_in_at_list and isinstance(callback.data, dict):
             is_in_at_list = bool(callback.data.get("isInAtList") or callback.data.get("is_in_at_list"))
-        pre_filter_allowed = should_accept_session_source(source, query_text, mentioned=is_in_at_list)
-        authorized = authorize_session_source(source)
         self.logger.info(
             f"[trace_id={trace_id}] DingTalk message metadata: "
             f"chat_id={source.chat_id}, chat_type={source.chat_type}, sender_id={source.user_id}, "
@@ -701,6 +699,17 @@ class CardBotHandler(dingtalk_stream.ChatbotHandler):
             f"is_in_at_list={is_in_at_list}, "
             f"session_webhook_present={bool(session_webhook)}, query_length={len(query_text)}"
         )
+        if bot_core.is_identity_command(query_text):
+            language = store.get_language(dingtalk_conversation_id, sender_id, platform="dingtalk")
+            await self.reply_command_content(
+                bot_core.format_identity_source(source, language),
+                incoming_message,
+                callback.data,
+            )
+            return AckMessage.STATUS_OK, "OK"
+
+        pre_filter_allowed = should_accept_session_source(source, query_text, mentioned=is_in_at_list)
+        authorized = authorize_session_source(source)
         if not pre_filter_allowed or not authorized:
             self.logger.info(
                 f"[trace_id={trace_id}] DingTalk message ignored: "
@@ -714,7 +723,7 @@ class CardBotHandler(dingtalk_stream.ChatbotHandler):
             return AckMessage.STATUS_OK, "OK"
         context = BotContext("dingtalk", dingtalk_conversation_id, sender_id, store)
 
-        control_result = await handle_control_command(query_text, context, card_supported=True)
+        control_result = await handle_control_command(query_text, context, card_supported=True, source=source)
         if control_result.handled:
             self.logger.info(
                 f"[trace_id={trace_id}] DingTalk control command handled, "
@@ -726,18 +735,18 @@ class CardBotHandler(dingtalk_stream.ChatbotHandler):
 
         active_state = context.registry.try_start(context)
         if active_state is None:
-            language = store.get_language(dingtalk_conversation_id, sender_id)
+            language = store.get_language(dingtalk_conversation_id, sender_id, platform="dingtalk")
             _reply_text_with_dingtalk_group_mention(self, build_busy_content(language), incoming_message)
             return AckMessage.STATUS_OK, "OK"
 
-        session_enabled = store.is_session_enabled(dingtalk_conversation_id, sender_id)
-        card_enabled = store.is_card_enabled(dingtalk_conversation_id, sender_id)
-        selected_agent = store.get_agent(dingtalk_conversation_id, sender_id)
+        session_enabled = store.is_session_enabled(dingtalk_conversation_id, sender_id, platform="dingtalk")
+        card_enabled = store.is_card_enabled(dingtalk_conversation_id, sender_id, platform="dingtalk")
+        selected_agent = store.get_agent(dingtalk_conversation_id, sender_id, platform="dingtalk")
         custom_agent_id = selected_agent.get("id", "")
-        language = store.get_language(dingtalk_conversation_id, sender_id)
-        timezone = store.get_timezone(dingtalk_conversation_id, sender_id)
+        language = store.get_language(dingtalk_conversation_id, sender_id, platform="dingtalk")
+        timezone = store.get_timezone(dingtalk_conversation_id, sender_id, platform="dingtalk")
         # 默认保持多轮上下文；用户可以通过 /session off 为当前会话和发送人关闭。
-        conversion_id = store.get(dingtalk_conversation_id, sender_id) if session_enabled else ""
+        conversion_id = store.get(dingtalk_conversation_id, sender_id, platform="dingtalk") if session_enabled else ""
         self.logger.info(
             f"[trace_id={trace_id}] DingTalk RDS task accepted: "
             f"session_enabled={session_enabled}, card_enabled={card_enabled}, "
@@ -773,9 +782,9 @@ class CardBotHandler(dingtalk_stream.ChatbotHandler):
                 if (
                     final_conversion_id
                     and session_enabled
-                    and store.is_session_enabled(dingtalk_conversation_id, sender_id)
+                    and store.is_session_enabled(dingtalk_conversation_id, sender_id, platform="dingtalk")
                 ):
-                    store.set(dingtalk_conversation_id, sender_id, final_conversion_id)
+                    store.set(dingtalk_conversation_id, sender_id, final_conversion_id, platform="dingtalk")
             finally:
                 notifier_task.cancel()
                 with contextlib.suppress(asyncio.CancelledError):

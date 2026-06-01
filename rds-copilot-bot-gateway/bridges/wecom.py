@@ -16,8 +16,10 @@ from core.bot_core import (
     build_error_content,
     build_no_message_content,
     call_with_stream,
+    format_identity_source,
     get_copilot_conversation_store,
     handle_control_command,
+    is_identity_command,
     run_still_working_notifier,
     should_accept_session_source,
 )
@@ -343,14 +345,24 @@ class WeComBridge:
                 text = text.split(maxsplit=1)[1] if len(text.split(maxsplit=1)) == 2 else ""
         if not text:
             return
+        headers = payload.get("headers") if isinstance(payload.get("headers"), dict) else {}
+        reply_req_id = str(headers.get("req_id") or "")
+        if is_identity_command(text):
+            language = self.store.get_language(source.chat_id, source.user_id, platform=WECOM_PLATFORM)
+            await self.send_text(
+                source.chat_id,
+                format_identity_source(source, language),
+                reply_req_id=reply_req_id,
+                source=source,
+            )
+            return
         if not should_accept_session_source(source, text) or not authorize_session_source(source):
             logger.info("Unauthorized WeCom message ignored: chat_id={} user_id={}", source.chat_id, source.user_id)
             return
-        headers = payload.get("headers") if isinstance(payload.get("headers"), dict) else {}
         await self.handle_text_message(
             source=source,
             text=text,
-            reply_req_id=str(headers.get("req_id") or ""),
+            reply_req_id=reply_req_id,
             message_id=str(body.get("msgid") or ""),
         )
 
@@ -363,8 +375,24 @@ class WeComBridge:
         message_id: str = "",
     ):
         query_text = (text or "").strip()
+        if is_identity_command(query_text):
+            language = self.store.get_language(source.chat_id, source.user_id, platform=WECOM_PLATFORM)
+            await self.send_text(
+                source.chat_id,
+                format_identity_source(source, language),
+                reply_req_id=reply_req_id,
+                source=source,
+            )
+            return
+
         context = BotContext(source.platform, source.chat_id, source.user_id, self.store)
-        control_result = await handle_control_command(query_text, context, self.copilot_factory, card_supported=False)
+        control_result = await handle_control_command(
+            query_text,
+            context,
+            self.copilot_factory,
+            card_supported=False,
+            source=source,
+        )
         if control_result.handled:
             for index, content in enumerate(control_result.response_contents()):
                 await self.send_text(

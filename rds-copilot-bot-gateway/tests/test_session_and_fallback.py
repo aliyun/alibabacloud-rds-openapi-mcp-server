@@ -720,7 +720,7 @@ class PlainReplyTest(unittest.IsolatedAsyncioTestCase):
 
 class CardBotHandlerCommandTest(unittest.IsolatedAsyncioTestCase):
     def setUp(self):
-        self.env_patcher = patch.dict(os.environ, {"GATEWAY_ALLOW_ALL_USERS": "true"})
+        self.env_patcher = patch.dict(os.environ, {"DINGTALK_DM_ALLOW_POLICY": "open", "DINGTALK_GROUP_ALLOW_POLICY": "open"})
         self.env_patcher.start()
 
     def tearDown(self):
@@ -740,8 +740,8 @@ class CardBotHandlerCommandTest(unittest.IsolatedAsyncioTestCase):
 
             self.assertEqual((status, message), (dingtalk_bridge.AckMessage.STATUS_OK, "OK"))
             self.assertEqual(replies, ["@staff-1\n多轮对话保持已关闭。"])
-            self.assertFalse(store.is_session_enabled("ding-conv-1", "sender-1"))
-            self.assertEqual(store.get("ding-conv-1", "sender-1"), "")
+            self.assertFalse(store.is_session_enabled("ding-conv-1", "sender-1", platform="dingtalk"))
+            self.assertEqual(store.get("ding-conv-1", "sender-1", platform="dingtalk"), "")
 
     async def test_new_command_clears_json_conversation_id_and_replies_in_english(self):
         with tempfile.TemporaryDirectory() as tmp_dir, \
@@ -757,8 +757,8 @@ class CardBotHandlerCommandTest(unittest.IsolatedAsyncioTestCase):
 
             self.assertEqual((status, message), (dingtalk_bridge.AckMessage.STATUS_OK, "OK"))
             self.assertEqual(replies, ["@staff-1\n已开启新对话。"])
-            self.assertTrue(store.is_session_enabled("ding-conv-1", "sender-1"))
-            self.assertEqual(store.get("ding-conv-1", "sender-1"), "")
+            self.assertTrue(store.is_session_enabled("ding-conv-1", "sender-1", platform="dingtalk"))
+            self.assertEqual(store.get("ding-conv-1", "sender-1", platform="dingtalk"), "")
 
     async def test_card_off_command_updates_json_store_and_replies_in_english(self):
         with tempfile.TemporaryDirectory() as tmp_dir, \
@@ -773,7 +773,7 @@ class CardBotHandlerCommandTest(unittest.IsolatedAsyncioTestCase):
 
             self.assertEqual((status, message), (dingtalk_bridge.AckMessage.STATUS_OK, "OK"))
             self.assertEqual(replies, ["@staff-1\n卡片回复已关闭。"])
-            self.assertFalse(store.is_card_enabled("ding-conv-1", "sender-1"))
+            self.assertFalse(store.is_card_enabled("ding-conv-1", "sender-1", platform="dingtalk"))
 
     async def test_card_off_routes_to_plain_reply_instead_of_ai_card(self):
         with tempfile.TemporaryDirectory() as tmp_dir:
@@ -871,7 +871,7 @@ class BridgeSelectionTest(unittest.TestCase):
 
 class FeishuBridgeTest(unittest.IsolatedAsyncioTestCase):
     def setUp(self):
-        self.env_patcher = patch.dict(os.environ, {"GATEWAY_ALLOW_ALL_USERS": "true"})
+        self.env_patcher = patch.dict(os.environ, {"FEISHU_DM_ALLOW_POLICY": "open", "FEISHU_GROUP_ALLOW_POLICY": "open"})
         self.env_patcher.start()
 
     def tearDown(self):

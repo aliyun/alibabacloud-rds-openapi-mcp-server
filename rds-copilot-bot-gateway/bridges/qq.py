@@ -17,8 +17,10 @@ from core.bot_core import (
     build_error_content,
     build_no_message_content,
     call_with_stream,
+    format_identity_source,
     get_copilot_conversation_store,
     handle_control_command,
+    is_identity_command,
     run_still_working_notifier,
     should_accept_session_source,
 )
@@ -51,27 +53,6 @@ QQ_MSG_TYPE_MARKDOWN = 2
 QQ_INTENTS = (1 << 25) | (1 << 30) | (1 << 12)
 DEFAULT_QQ_RECONNECT_BASE_SECONDS = 3.0
 DEFAULT_QQ_RECONNECT_MAX_SECONDS = 60.0
-
-
-def _read_bool_env(name: str, default: bool = True) -> bool:
-    raw_value = os.getenv(name)
-    if raw_value is None:
-        return default
-    return raw_value.strip().lower() not in {"0", "false", "no", "off"}
-
-
-def _dev_tls_override_allowed() -> bool:
-    return os.getenv("RDS_BOT_ENV", "").strip().lower() in {"dev", "development", "local", "test", "testing"}
-
-
-def _read_qq_tls_verify() -> bool:
-    tls_verify = _read_bool_env("QQ_HTTP_VERIFY", True)
-    if not tls_verify and not _dev_tls_override_allowed():
-        raise RuntimeError(
-            "QQ_HTTP_VERIFY=false 只允许在本地调试环境使用；"
-            "如确需关闭证书校验，请同时设置 RDS_BOT_ENV=dev。"
-        )
-    return tls_verify
 
 
 def _read_positive_float_env(name: str, default: float) -> float:
@@ -151,7 +132,6 @@ class QQBridge:
         self.session_id = ""
         self._heartbeat_task = None
         self._heartbeat_ack_received = True
-        self.tls_verify = _read_qq_tls_verify()
 
     async def start_forever(self):  # pragma: no cover - real WebSocket loop is covered by integration smoke tests
         if not AIOHTTP_AVAILABLE or not HTTPX_AVAILABLE:
@@ -163,7 +143,7 @@ class QQBridge:
             )
 
         self._running = True
-        self.http_client = httpx.AsyncClient(timeout=30.0, follow_redirects=True, verify=self.tls_verify, trust_env=True)
+        self.http_client = httpx.AsyncClient(timeout=30.0, follow_redirects=True, verify=True, trust_env=True)
         restart_index = 0
         try:
             while self._running:
@@ -195,8 +175,7 @@ class QQBridge:
         self._heartbeat_task = None
         try:
             gateway_url = await self.get_gateway_url()
-            ws_kwargs = {} if self.tls_verify else {"ssl": False}
-            self.ws = await self.session.ws_connect(gateway_url, **ws_kwargs)
+            self.ws = await self.session.ws_connect(gateway_url)
             logger.info("QQ bridge connected by websocket, gateway_url={}", gateway_url)
             await self._receive_gateway_loop()
         finally:
@@ -260,7 +239,7 @@ class QQBridge:
             raise RuntimeError("httpx is not installed")
         close_client = False
         if self.http_client is None:
-            self.http_client = httpx.AsyncClient(timeout=30.0, follow_redirects=True, verify=self.tls_verify, trust_env=True)
+            self.http_client = httpx.AsyncClient(timeout=30.0, follow_redirects=True, verify=True, trust_env=True)
             close_client = True
         try:
             url = path if path.startswith("http") else f"{QQ_API_BASE}{path}"
@@ -388,6 +367,10 @@ class QQBridge:
         source, text = source_and_text_from_qq_event(event_type, data)
         if not source.chat_id or not source.user_id or not text:
             return
+        if is_identity_command(text):
+            language = self.store.get_language(source.chat_id, source.user_id, platform=QQ_PLATFORM)
+            await self.send_text(source, format_identity_source(source, language))
+            return
         if not should_accept_session_source(source, text) or not authorize_session_source(source):
             logger.info("Unauthorized QQ message ignored: chat_id=%s user_id=%s", source.chat_id, source.user_id)
             return
@@ -395,8 +378,19 @@ class QQBridge:
 
     async def handle_text_message(self, *, source: SessionSource, text: str):
         query_text = (text or "").strip()
+        if is_identity_command(query_text):
+            language = self.store.get_language(source.chat_id, source.user_id, platform=QQ_PLATFORM)
+            await self.send_text(source, format_identity_source(source, language))
+            return
+
         context = BotContext(source.platform, source.chat_id, source.user_id, self.store)
-        control_result = await handle_control_command(query_text, context, self.copilot_factory, card_supported=False)
+        control_result = await handle_control_command(
+            query_text,
+            context,
+            self.copilot_factory,
+            card_supported=False,
+            source=source,
+        )
         if control_result.handled:
             for content in control_result.response_contents():
                 await self.send_text(source, content)

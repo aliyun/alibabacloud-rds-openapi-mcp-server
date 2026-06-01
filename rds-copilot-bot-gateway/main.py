@@ -33,12 +33,13 @@ BRIDGE_REQUIRED_ENV = {
         "QQ_CLIENT_SECRET": "QQ Bot Client Secret",
     },
 }
-BRIDGE_AUTH_ENV = {
-    "dingtalk": ("DINGTALK_ALLOWED_USERS", "DINGTALK_ALLOW_ALL_USERS"),
-    "feishu": ("FEISHU_ALLOWED_USERS", "FEISHU_ALLOW_ALL_USERS"),
-    "wecom": ("WECOM_ALLOWED_USERS", "WECOM_ALLOW_ALL_USERS"),
-    "qqbot": ("QQ_ALLOWED_USERS", "QQ_ALLOW_ALL_USERS"),
+BRIDGE_SECURITY_PREFIX = {
+    "dingtalk": "DINGTALK",
+    "feishu": "FEISHU",
+    "wecom": "WECOM",
+    "qqbot": "QQ",
 }
+ALLOW_POLICY_VALUES = {"disabled", "allowlist", "open"}
 BRIDGE_CREDENTIAL_HINTS = {
     "dingtalk": "DINGTALK_APP_CLIENT_ID / DINGTALK_APP_CLIENT_SECRET",
     "feishu": "FEISHU_APP_ID / FEISHU_APP_SECRET",
@@ -113,20 +114,6 @@ def _env_present(name: str) -> bool:
     return bool(os.getenv(name, "").strip())
 
 
-def _env_truthy(name: str) -> bool:
-    return os.getenv(name, "").strip().lower() in {"1", "true", "yes", "on", "*"}
-
-
-def _authorization_configured(bridge_name: str) -> bool:
-    allowed_users_env, allow_all_env = BRIDGE_AUTH_ENV[bridge_name]
-    return (
-        _env_present(allowed_users_env)
-        or _env_truthy(allow_all_env)
-        or _env_present("GATEWAY_ALLOWED_USERS")
-        or _env_truthy("GATEWAY_ALLOW_ALL_USERS")
-    )
-
-
 def validate_startup_environment(bridge_names: list[str]) -> None:
     missing_items: list[tuple[str, str]] = []
     for name, description in COMMON_REQUIRED_ENV.items():
@@ -137,21 +124,22 @@ def validate_startup_environment(bridge_names: list[str]) -> None:
         for name, description in BRIDGE_REQUIRED_ENV[bridge_name].items():
             if not _env_present(name):
                 missing_items.append((name, f"{bridge_name}: {description}"))
-        if not _authorization_configured(bridge_name):
-            allowed_users_env, allow_all_env = BRIDGE_AUTH_ENV[bridge_name]
-            missing_items.append((
-                f"{allowed_users_env} or {allow_all_env}=true",
-                f"{bridge_name}: 至少配置一个授权入口；也可使用 GATEWAY_ALLOWED_USERS 或 GATEWAY_ALLOW_ALL_USERS=true",
-            ))
+        prefix = BRIDGE_SECURITY_PREFIX[bridge_name]
+        for scope in ("DM", "GROUP"):
+            env_name = f"{prefix}_{scope}_ALLOW_POLICY"
+            policy = os.getenv(env_name, "").strip().lower()
+            if policy and policy not in ALLOW_POLICY_VALUES:
+                allowed = ", ".join(sorted(ALLOW_POLICY_VALUES))
+                missing_items.append((env_name, f"{bridge_name}: 取值只能是 {allowed}"))
 
     if not missing_items:
         return
 
     lines = [
-        "RDS Copilot Bot Gateway 配置错误：缺少必需环境变量。",
+        "RDS Copilot Bot Gateway 配置错误：请修正以下环境变量。",
         f"已选择 bridge：{', '.join(bridge_names)}",
         "",
-        "缺少：",
+        "问题：",
     ]
     lines.extend(f"- {name}: {description}" for name, description in missing_items)
     lines.extend(

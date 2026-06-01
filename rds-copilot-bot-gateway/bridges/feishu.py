@@ -19,8 +19,10 @@ from core.bot_core import (
     build_busy_content,
     build_no_message_content,
     call_with_stream,
+    format_identity_source,
     get_copilot_conversation_store,
     handle_control_command,
+    is_identity_command,
     run_still_working_notifier,
     should_accept_session_source,
 )
@@ -225,12 +227,7 @@ def _feishu_bot_tokens_from_info(bot_info: dict[str, Any]) -> set[str]:
 
 def _feishu_requires_mention() -> bool:
     policy = os.getenv("FEISHU_GROUP_POLICY", "mention").strip().lower()
-    if policy in {"open", "disabled"}:
-        return False
-    require_mention = os.getenv("FEISHU_REQUIRE_MENTION", "").strip().lower()
-    if require_mention in {"0", "false", "no", "off"}:
-        return False
-    return True
+    return policy not in {"open", "disabled"}
 
 
 def _is_message_mentioning_bot(message: Any, text: str, bot_tokens: Optional[set[str]] = None) -> bool:
@@ -506,6 +503,16 @@ class FeishuBridge:
         message_text = _load_feishu_message_text(getattr(message, "content", "") or "")
         query_text = _strip_feishu_leading_mentions(message_text, message)
         mentioned = _is_message_mentioning_bot(message, message_text, self.bot_tokens or None)
+        if is_identity_command(query_text):
+            language = self.store.get_language(chat_id, sender_id, platform=FEISHU_PLATFORM)
+            await self.send_text(
+                chat_id,
+                format_identity_source(source, language),
+                reply_to_message_id=getattr(message, "message_id", "") or None,
+                source=source,
+            )
+            return
+
         pre_filter_allowed = should_accept_session_source(source, query_text, mentioned=mentioned)
         authorized = authorize_session_source(source)
         if not pre_filter_allowed or not authorized:
@@ -563,8 +570,6 @@ class FeishuBridge:
             user_id_alt=sender_id_alt,
             is_bot=is_bot,
         )
-        pre_filter_allowed = should_accept_session_source(source, query_text, mentioned=mentioned)
-        authorized = authorize_session_source(source)
         logger.info(
             "Feishu message metadata: chat_id={}, chat_type={}, sender_id={}, sender_id_alt={}, "
             "is_bot={}, mentioned={}, query_length={}",
@@ -576,6 +581,18 @@ class FeishuBridge:
             mentioned,
             len(query_text),
         )
+        if is_identity_command(query_text):
+            language = self.store.get_language(chat_id, sender_id, platform=FEISHU_PLATFORM)
+            await self.send_text(
+                chat_id,
+                format_identity_source(source, language),
+                reply_to_message_id=message_id,
+                source=source,
+            )
+            return
+
+        pre_filter_allowed = should_accept_session_source(source, query_text, mentioned=mentioned)
+        authorized = authorize_session_source(source)
         if not pre_filter_allowed or not authorized:
             logger.info(
                 "Feishu message ignored: chat_id={}, sender_id={}, pre_filter_allowed={}, authorized={}",
@@ -592,6 +609,7 @@ class FeishuBridge:
             context,
             self.copilot_factory,
             card_supported=False,
+            source=source,
         )
         if control_result.handled:
             for content in control_result.response_contents():

@@ -104,39 +104,60 @@ def _matches_allowlist(values: set[str], entries: list[str], platform: str = "")
     return False
 
 
-PLATFORM_ALLOWED_USERS_ENV = {
-    "dingtalk": "DINGTALK_ALLOWED_USERS",
-    "feishu": "FEISHU_ALLOWED_USERS",
-    "wecom": "WECOM_ALLOWED_USERS",
-    "qqbot": "QQ_ALLOWED_USERS",
+PLATFORM_ENV_PREFIX = {
+    "dingtalk": "DINGTALK",
+    "feishu": "FEISHU",
+    "wecom": "WECOM",
+    "qqbot": "QQ",
 }
+ALLOW_POLICY_VALUES = {"disabled", "allowlist", "open"}
 
-PLATFORM_ALLOW_ALL_ENV = {
-    "dingtalk": "DINGTALK_ALLOW_ALL_USERS",
-    "feishu": "FEISHU_ALLOW_ALL_USERS",
-    "wecom": "WECOM_ALLOW_ALL_USERS",
-    "qqbot": "QQ_ALLOW_ALL_USERS",
-}
+
+def _source_scope(source: SessionSource) -> str:
+    chat_type = (source.chat_type or "dm").strip().lower()
+    return "GROUP" if chat_type in {"group", "channel"} else "DM"
+
+
+def _read_allow_policy(prefix: str, scope: str) -> str:
+    policy = os.getenv(f"{prefix}_{scope}_ALLOW_POLICY", "allowlist").strip().lower()
+    return policy or "allowlist"
+
+
+def _source_allow_values(source: SessionSource, scope: str) -> set[str]:
+    if scope == "GROUP":
+        return {source.chat_id} if source.chat_id else set()
+    identities = source.identity_values()
+    if not identities and source.chat_id:
+        identities.add(source.chat_id)
+    return identities
 
 
 def authorize_session_source(source: SessionSource) -> bool:
     platform = (source.platform or "").strip().lower()
-    identities = source.identity_values()
-    if not identities:
+    prefix = PLATFORM_ENV_PREFIX.get(platform, "")
+    if not prefix:
         return False
 
-    allow_all_env = PLATFORM_ALLOW_ALL_ENV.get(platform, "")
-    if allow_all_env and _env_flag(allow_all_env):
+    scope = _source_scope(source)
+    policy = _read_allow_policy(prefix, scope)
+    if policy not in ALLOW_POLICY_VALUES:
+        logger.warning(
+            "Invalid allow policy ignored: {}_{}_ALLOW_POLICY={}",
+            prefix,
+            scope,
+            policy,
+        )
+        return False
+    if policy == "disabled":
+        return False
+
+    values = _source_allow_values(source, scope)
+    if not values:
+        return False
+    if policy == "open":
         return True
 
-    allowed_users_env = PLATFORM_ALLOWED_USERS_ENV.get(platform, "")
-    if allowed_users_env and _matches_allowlist(identities, _split_env_list(allowed_users_env), platform):
-        return True
-
-    if _matches_allowlist(identities, _split_env_list("GATEWAY_ALLOWED_USERS"), platform):
-        return True
-
-    return _env_flag("GATEWAY_ALLOW_ALL_USERS")
+    return _matches_allowlist(values, _split_env_list(f"{prefix}_{scope}_ALLOW_LIST"), platform)
 
 
 def _source_chat_matches(source: SessionSource, env_name: str) -> bool:
@@ -156,9 +177,6 @@ def should_accept_session_source(source: SessionSource, text: str = "", *, menti
     chat_type = (source.chat_type or "dm").strip().lower()
 
     if platform == "dingtalk":
-        allowed_chats = _split_env_list("DINGTALK_ALLOWED_CHATS")
-        if allowed_chats and not _source_chat_matches(source, "DINGTALK_ALLOWED_CHATS"):
-            return False
         if chat_type == "group" and _env_flag("DINGTALK_REQUIRE_MENTION"):
             if _source_chat_matches(source, "DINGTALK_FREE_RESPONSE_CHATS"):
                 return True
@@ -172,8 +190,7 @@ def should_accept_session_source(source: SessionSource, text: str = "", *, menti
             policy = os.getenv("FEISHU_GROUP_POLICY", "mention").strip().lower()
             if policy == "disabled":
                 return False
-            require_mention = _env_flag("FEISHU_REQUIRE_MENTION", default=(policy != "open"))
-            if require_mention:
+            if policy != "open":
                 bot_tokens = {
                     os.getenv("FEISHU_BOT_OPEN_ID", "").strip(),
                     os.getenv("FEISHU_BOT_USER_ID", "").strip(),
@@ -184,33 +201,7 @@ def should_accept_session_source(source: SessionSource, text: str = "", *, menti
                 return mentioned or mentioned_by_token
         return True
 
-    if platform == "wecom":
-        if chat_type == "group":
-            policy = os.getenv("WECOM_GROUP_POLICY", "open").strip().lower()
-            if policy == "disabled":
-                return False
-            if policy == "allowlist":
-                return _source_chat_matches(source, "WECOM_ALLOWED_CHATS")
-            return True
-        policy = os.getenv("WECOM_DM_POLICY", "open").strip().lower()
-        if policy == "disabled":
-            return False
-        if policy == "allowlist":
-            return _matches_allowlist(source.identity_values(), _split_env_list("WECOM_ALLOWED_USERS"), platform)
-        return True
-
-    if platform == "qqbot":
-        if chat_type == "group":
-            policy = os.getenv("QQ_GROUP_POLICY", "open").strip().lower()
-            if policy == "disabled":
-                return False
-            group_entries = _split_env_list("QQ_GROUP_ALLOWED_USERS")
-            if group_entries:
-                return _matches_allowlist({source.chat_id}, group_entries, platform)
-        else:
-            policy = os.getenv("QQ_DM_POLICY", "open").strip().lower()
-            if policy == "disabled":
-                return False
+    if platform in {"wecom", "qqbot"}:
         return True
 
     return True
@@ -263,6 +254,7 @@ I18N_MESSAGES = {
         "help_title": "RDS Copilot 短命令",
         "help_items": [
             ("/help", "查看短命令帮助。"),
+            ("/myid", "查看当前 IM 平台的用户 ID 和会话 ID。"),
             ("/btw", "查看当前正在运行任务已经收到的回复内容。"),
             ("/stop", "停止当前正在运行的 RDS AI 任务。"),
             ("/card|on|off", "查看或管理钉钉 AI 卡片回复。"),
@@ -331,6 +323,7 @@ I18N_MESSAGES = {
         "help_title": "RDS Copilot 短命令",
         "help_items": [
             ("/help", "查看短命令說明。"),
+            ("/myid", "查看目前 IM 平台的使用者 ID 和會話 ID。"),
             ("/btw", "查看目前執行中任務已收到的回覆內容。"),
             ("/stop", "停止目前執行中的 RDS AI 任務。"),
             ("/card|on|off", "查看或管理釘釘 AI 卡片回覆。"),
@@ -399,6 +392,7 @@ I18N_MESSAGES = {
         "help_title": "RDS Copilot commands",
         "help_items": [
             ("/help", "Show command help."),
+            ("/myid", "Show your current IM user ID and chat ID."),
             ("/btw", "Show the answer received by the current running task."),
             ("/stop", "Stop the current RDS AI task."),
             ("/card|on|off", "View or manage DingTalk AI card replies."),
@@ -467,6 +461,7 @@ I18N_MESSAGES = {
         "help_title": "RDS Copilot コマンド",
         "help_items": [
             ("/help", "短縮コマンドのヘルプを表示します。"),
+            ("/myid", "現在の IM ユーザー ID とチャット ID を表示します。"),
             ("/btw", "実行中タスクで受信済みの回答を表示します。"),
             ("/stop", "実行中の RDS AI タスクを停止します。"),
             ("/card|on|off", "DingTalk AI カード返信を表示または管理します。"),
@@ -644,6 +639,108 @@ def is_new_conversation_command(text: str) -> bool:
     return _normalize_command_prefix(text).lower() == NEW_CONVERSATION_COMMAND
 
 
+def is_identity_command(text: str) -> bool:
+    return _normalize_command_prefix(text).lower() == "/myid"
+
+
+IDENTITY_LABELS = {
+    "zh-CN": {
+        "title": "我的 IM 身份信息",
+        "platform": "平台",
+        "chat_type": "会话类型",
+        "chat_id": "会话 ID",
+        "user_id": "用户 ID",
+        "user_id_alt": "备用用户 ID",
+        "user_name": "用户名称",
+        "config": "当前会话配置示例",
+        "empty": "空",
+    },
+    "zh-TW": {
+        "title": "我的 IM 身分資訊",
+        "platform": "平台",
+        "chat_type": "會話類型",
+        "chat_id": "會話 ID",
+        "user_id": "使用者 ID",
+        "user_id_alt": "備用使用者 ID",
+        "user_name": "使用者名稱",
+        "config": "目前會話設定範例",
+        "empty": "空",
+    },
+    "en-US": {
+        "title": "My IM Identity",
+        "platform": "Platform",
+        "chat_type": "Chat type",
+        "chat_id": "Chat ID",
+        "user_id": "User ID",
+        "user_id_alt": "Alternate user ID",
+        "user_name": "User name",
+        "config": "Config snippet for this chat",
+        "empty": "empty",
+    },
+    "ja-JP": {
+        "title": "自分の IM ID",
+        "platform": "プラットフォーム",
+        "chat_type": "チャット種別",
+        "chat_id": "チャット ID",
+        "user_id": "ユーザー ID",
+        "user_id_alt": "代替ユーザー ID",
+        "user_name": "ユーザー名",
+        "config": "このチャット用の設定例",
+        "empty": "空",
+    },
+}
+
+
+def _identity_label(language: str, key: str) -> str:
+    labels = IDENTITY_LABELS.get(_message_language(language), IDENTITY_LABELS[DEFAULT_LANGUAGE])
+    return labels.get(key) or IDENTITY_LABELS[DEFAULT_LANGUAGE][key]
+
+
+def _preferred_dm_allow_value(source: SessionSource) -> str:
+    platform = (source.platform or "").strip().lower()
+    if platform == "dingtalk" and source.user_id_alt:
+        return source.user_id_alt
+    return source.user_id or source.user_id_alt or source.chat_id
+
+
+def _identity_display_user_id(source: SessionSource) -> str:
+    if (source.platform or "").strip().lower() == "dingtalk":
+        return source.user_id_alt or source.user_id
+    return source.user_id
+
+
+def format_identity_source(source: SessionSource, language: str = DEFAULT_LANGUAGE) -> str:
+    platform = (source.platform or "").strip().lower()
+    prefix = PLATFORM_ENV_PREFIX.get((source.platform or "").strip().lower(), (source.platform or "IM").upper())
+    scope = _source_scope(source)
+    allow_value = source.chat_id if scope == "GROUP" else _preferred_dm_allow_value(source)
+    value_or_empty = lambda value: f"`{value}`" if value else f"`{_identity_label(language, 'empty')}`"
+    lines = [
+        f"### {_identity_label(language, 'title')}",
+        "",
+        f"- {_identity_label(language, 'platform')}：{value_or_empty(source.platform)}",
+        f"- {_identity_label(language, 'chat_type')}：{value_or_empty((source.chat_type or 'dm').lower())}",
+        f"- {_identity_label(language, 'chat_id')}：{value_or_empty(source.chat_id)}",
+        f"- {_identity_label(language, 'user_id')}：{value_or_empty(_identity_display_user_id(source))}",
+    ]
+    if platform != "dingtalk":
+        lines.append(f"- {_identity_label(language, 'user_id_alt')}：{value_or_empty(source.user_id_alt)}")
+    if source.user_name:
+        lines.append(f"- {_identity_label(language, 'user_name')}：{value_or_empty(source.user_name)}")
+    lines.extend(
+        [
+            "",
+            f"#### {_identity_label(language, 'config')}",
+            "",
+            "```dotenv",
+            f"{prefix}_{scope}_ALLOW_POLICY=allowlist",
+            f"{prefix}_{scope}_ALLOW_LIST={allow_value}",
+            "```",
+        ]
+    )
+    return "\n".join(lines)
+
+
 def build_error_content(error: Exception, language: str = DEFAULT_LANGUAGE, trace_id: str = "") -> str:
     lines = [str(_t(language, "error_failed"))]
     if trace_id:
@@ -679,10 +776,14 @@ class CopilotConversationStore:
     def _key(conversation_id: str, sender_id: str, platform: str = "") -> str:
         if not conversation_id or not sender_id:
             return ""
-        key_parts = [conversation_id, sender_id]
-        if platform and platform != "dingtalk":
-            key_parts = [platform, conversation_id, sender_id]
+        key_parts = [platform, conversation_id, sender_id] if platform else [conversation_id, sender_id]
         return json.dumps(key_parts, ensure_ascii=False, separators=(",", ":"))
+
+    @staticmethod
+    def _legacy_key(conversation_id: str, sender_id: str) -> str:
+        if not conversation_id or not sender_id:
+            return ""
+        return json.dumps([conversation_id, sender_id], ensure_ascii=False, separators=(",", ":"))
 
     def _empty_data(self) -> dict:
         return {"version": 1, "conversations": {}}
@@ -734,7 +835,10 @@ class CopilotConversationStore:
         if not key:
             return {}
         with self._lock:
-            item = self._load_unlocked().get("conversations", {}).get(key, {})
+            conversations = self._load_unlocked().get("conversations", {})
+            item = conversations.get(key, {})
+            if platform and not item:
+                item = conversations.get(self._legacy_key(conversation_id, sender_id), {})
         return item if isinstance(item, dict) else {}
 
     def _update_item(
@@ -751,6 +855,11 @@ class CopilotConversationStore:
             data = self._load_unlocked()
             conversations = data.setdefault("conversations", {})
             item = conversations.get(key, {})
+            legacy_key = self._legacy_key(conversation_id, sender_id) if platform else ""
+            if platform and not item and legacy_key:
+                legacy_item = conversations.pop(legacy_key, {})
+                if isinstance(legacy_item, dict):
+                    item = legacy_item
             if not isinstance(item, dict):
                 item = {}
             item.update(
@@ -1337,6 +1446,7 @@ async def handle_control_command(
     rds_copilot: Any = None,
     *,
     card_supported: bool = True,
+    source: SessionSource | None = None,
 ) -> ControlCommandResult:
     command_text = (text or "").strip()
     normalized = _normalize_command_prefix(command_text)
@@ -1348,6 +1458,10 @@ async def handle_control_command(
 
     if normalized == "/help":
         return ControlCommandResult(True, format_help(language))
+
+    if is_identity_command(normalized):
+        identity_source = source or SessionSource(platform, chat_id, "dm", sender_id)
+        return ControlCommandResult(True, format_identity_source(identity_source, language))
 
     if normalized == "/btw":
         state = context.registry.get(context)

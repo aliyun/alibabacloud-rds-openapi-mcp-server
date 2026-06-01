@@ -40,34 +40,32 @@ LOADABLE_ENV_NAMES = {
     "ACCESS_SECRET",
     "DINGTALK_APP_CLIENT_ID",
     "DINGTALK_APP_CLIENT_SECRET",
-    "DINGTALK_ALLOW_ALL_USERS",
-    "DINGTALK_ALLOWED_CHATS",
-    "DINGTALK_ALLOWED_USERS",
+    "DINGTALK_DM_ALLOW_LIST",
+    "DINGTALK_DM_ALLOW_POLICY",
     "DINGTALK_FREE_RESPONSE_CHATS",
+    "DINGTALK_GROUP_ALLOW_LIST",
+    "DINGTALK_GROUP_ALLOW_POLICY",
     "DINGTALK_MENTION_PATTERNS",
     "DINGTALK_REQUIRE_MENTION",
     "DINGTALK_ROBOT_CODE",
-    "FEISHU_ALLOW_ALL_USERS",
     "FEISHU_ALLOW_BOTS",
-    "FEISHU_ALLOWED_USERS",
     "FEISHU_APP_ID",
     "FEISHU_APP_SECRET",
     "FEISHU_BOT_NAME",
     "FEISHU_BOT_OPEN_ID",
     "FEISHU_BOT_USER_ID",
+    "FEISHU_DM_ALLOW_LIST",
+    "FEISHU_DM_ALLOW_POLICY",
     "FEISHU_DOMAIN",
+    "FEISHU_GROUP_ALLOW_LIST",
+    "FEISHU_GROUP_ALLOW_POLICY",
     "FEISHU_GROUP_POLICY",
-    "FEISHU_REQUIRE_MENTION",
-    "GATEWAY_ALLOW_ALL_USERS",
-    "GATEWAY_ALLOWED_USERS",
-    "QQ_ALLOWED_USERS",
-    "QQ_ALLOW_ALL_USERS",
     "QQ_APP_ID",
     "QQ_CLIENT_SECRET",
-    "QQ_DM_POLICY",
-    "QQ_GROUP_ALLOWED_USERS",
-    "QQ_GROUP_POLICY",
-    "QQ_HTTP_VERIFY",
+    "QQ_DM_ALLOW_LIST",
+    "QQ_DM_ALLOW_POLICY",
+    "QQ_GROUP_ALLOW_LIST",
+    "QQ_GROUP_ALLOW_POLICY",
     "QQ_RECONNECT_BASE_SECONDS",
     "QQ_RECONNECT_MAX_SECONDS",
     "RDS_BOT_BRIDGES",
@@ -77,11 +75,11 @@ LOADABLE_ENV_NAMES = {
     "RDS_COPILOT_ENDPOINT",
     "RDS_COPILOT_LOG_FILE",
     "RDS_E2E_MOCK_BRIDGE_TIMEOUT_SECONDS",
-    "WECOM_ALLOWED_USERS",
-    "WECOM_ALLOW_ALL_USERS",
     "WECOM_BOT_ID",
-    "WECOM_DM_POLICY",
-    "WECOM_GROUP_POLICY",
+    "WECOM_DM_ALLOW_LIST",
+    "WECOM_DM_ALLOW_POLICY",
+    "WECOM_GROUP_ALLOW_LIST",
+    "WECOM_GROUP_ALLOW_POLICY",
     "WECOM_HEARTBEAT_SECONDS",
     "WECOM_RECONNECT_BASE_SECONDS",
     "WECOM_RECONNECT_MAX_SECONDS",
@@ -311,7 +309,7 @@ async def _run_dingtalk_mock_query(query: str, store_path: str, copilot_factory:
         created_tasks.append(task)
         return task
 
-    with patch.dict(os.environ, {"RDS_COPILOT_CONVERSATION_STORE_FILE": store_path, "GATEWAY_ALLOW_ALL_USERS": "true"}), \
+    with patch.dict(os.environ, {"RDS_COPILOT_CONVERSATION_STORE_FILE": store_path, "DINGTALK_DM_ALLOW_POLICY": "open", "DINGTALK_GROUP_ALLOW_POLICY": "open"}), \
         patch("core.bot_core.RdsCopilot", side_effect=copilot_factory), \
         patch("bridges.dingtalk.RdsCopilot", side_effect=copilot_factory), \
         patch("bridges.dingtalk.dingtalk_stream.ChatbotMessage.from_dict", return_value=incoming_message), \
@@ -350,7 +348,7 @@ async def _run_feishu_mock_query(query: str, store_path: str, copilot_factory: C
             ),
         )
     )
-    with patch.dict(os.environ, {"GATEWAY_ALLOW_ALL_USERS": "true"}):
+    with patch.dict(os.environ, {"FEISHU_DM_ALLOW_POLICY": "open", "FEISHU_GROUP_ALLOW_POLICY": "open"}):
         await bridge.handle_message_event_data(event_data)
     return replies
 
@@ -376,27 +374,26 @@ async def _run_wecom_mock_query(query: str, store_path: str, copilot_factory: Ca
             "text": {"content": query},
         },
     }
-    with patch.dict(os.environ, {"WECOM_ALLOWED_USERS": "mock-wecom-user"}):
+    with patch.dict(os.environ, {"WECOM_GROUP_ALLOW_LIST": "mock-wecom-chat"}):
         await bridge.handle_payload(payload)
     return [frame["body"]["markdown"]["content"] for frame in frames if frame.get("body", {}).get("markdown")]
 
 
 async def _run_qq_mock_query(query: str, store_path: str, copilot_factory: Callable[[], RdsCopilot]) -> list[str]:
     bodies = []
-    with patch.dict(os.environ, {"QQ_HTTP_VERIFY": "true"}):
-        bridge = QQBridge(
-            app_id="mock-qq-app",
-            client_secret="mock-qq-secret",
-            store=bot_core.CopilotConversationStore(store_path),
-            copilot_factory=copilot_factory,
-        )
+    bridge = QQBridge(
+        app_id="mock-qq-app",
+        client_secret="mock-qq-secret",
+        store=bot_core.CopilotConversationStore(store_path),
+        copilot_factory=copilot_factory,
+    )
     bridge._api_request = AsyncMock(side_effect=lambda method, path, body=None: bodies.append(body or {}) or {"id": "mock-qq-sent"})
     event = {
         "id": "mock-qq-message",
         "content": query,
         "author": {"user_openid": "mock-qq-user"},
     }
-    with patch.dict(os.environ, {"QQ_ALLOWED_USERS": "mock-qq-user"}):
+    with patch.dict(os.environ, {"QQ_DM_ALLOW_LIST": "mock-qq-user"}):
         await bridge.handle_event("C2C_MESSAGE_CREATE", event)
     return [
         str(body["markdown"].get("content") or "")
