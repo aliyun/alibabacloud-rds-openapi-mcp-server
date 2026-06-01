@@ -77,16 +77,15 @@ RDS_BOT_BRIDGES=all
 | `GROUP_ALLOW_POLICY` | `allowlist` | 群聊策略；`disabled` 表示不处理群聊，`allowlist` 表示只允许名单内群聊，`open` 表示允许所有群聊。 |
 | `GROUP_ALLOW_LIST` | 空 | 群聊会话 ID 列表，多个用逗号分隔。 |
 
-首次配置时，可以临时把对应平台的 `DM_ALLOW_POLICY` 和 `GROUP_ALLOW_POLICY` 设为 `open`，在单聊和群聊里发送 `/myid` 或 `$myid`，机器人会返回当前平台的用户 ID、群聊 ID 和可复制的配置片段。拿到 ID 后建议改回 `allowlist`。
+`/myid` 和 `$myid` 不依赖上述白名单授权，可以直接用来查看当前平台的用户 ID、群聊 ID 和可复制的配置片段。`open` 适合临时联调普通对话；正式使用建议改回 `allowlist`。
 
 ## 获取用户 ID 和群聊 ID
 
 IM App 里能看到的昵称、手机号、QQ 号或群名称，通常不是开放平台消息里的真实 ID。建议用下面方式获取：
 
-1. 先临时设置对应平台的 `DM_ALLOW_POLICY=open` 和 `GROUP_ALLOW_POLICY=open`。
-2. 在单聊和目标群聊里发送 `/myid` 或 `$myid`。
-3. 把机器人返回的 `*_ALLOW_LIST` 配置复制到 `.env`。
-4. 把策略改回 `allowlist` 后重启服务。
+1. 在单聊和目标群聊里发送 `/myid` 或 `$myid`。
+2. 把机器人返回的 `*_ALLOW_LIST` 配置复制到 `.env`。
+3. 保持对应平台的策略为 `allowlist` 并重启服务。
 
 ## 钉钉
 
@@ -251,7 +250,7 @@ QQ_GROUP_ALLOW_LIST=group-openid-1
 
 群聊回复、短命令回复和长任务提醒会在群聊里 @ 发送人；单聊不会额外 @。群聊能否使用由各平台的 `GROUP_ALLOW_POLICY` 和 `GROUP_ALLOW_LIST` 控制，钉钉和飞书还可以额外配置是否要求 @ 机器人。
 
-如果你还不知道群聊 ID，先临时设置对应平台 `GROUP_ALLOW_POLICY=open`，在群里发送 `/myid`，拿到 ID 后再改为 `allowlist`。
+如果你还不知道群聊 ID，直接在群里发送 `/myid` 或 `$myid` 获取；这个命令不依赖群聊白名单授权。
 
 ### 钉钉群聊
 
