@@ -707,8 +707,9 @@ class BotCoreCoverageTest(unittest.IsolatedAsyncioTestCase):
             True,
         )
         conversation_lines = conversations_text.splitlines()
-        self.assertEqual(conversation_lines[1], f"- `updatedf` `{bot_core._format_created_at(300)}` Updated")
-        self.assertEqual(conversation_lines[2], f"- `neweridf` `{bot_core._format_created_at(200)}` Newer")
+        self.assertEqual(conversation_lines[1], f"- updatedf | {bot_core._format_created_at(300)} | Updated")
+        self.assertEqual(conversation_lines[2], f"- neweridf | {bot_core._format_created_at(200)} | Newer")
+        self.assertNotRegex(conversation_lines[1], r"updatedf\\d{4}-\\d{2}-\\d{2}")
         self.assertNotIn("id=", conversations_text)
         self.assertNotIn("hidden intro", conversations_text)
         self.assertIn("还有更多对话", conversations_text)
