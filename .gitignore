@@ -20,6 +20,9 @@ dist/
 .env
 .env.*
 !.env.example
+copilot_conversations.json
+rds-copilot-bot-gateway/rds-copilot.log
+rds-copilot-bot-gateway/dingding_bot_*.log
 
 # IDE and editor files
 .idea/

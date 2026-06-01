@@ -1,5 +1,0 @@
-dingtalk-stream>=0.21.0
-dashscope
-loguru
-alibabacloud-tea-openapi
-alibabacloud-tea-util
